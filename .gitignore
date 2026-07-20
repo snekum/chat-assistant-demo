@@ -1,0 +1,34 @@
+# --- Corpus & derived data: real-person dossiers. NEVER commit. ---
+# NB: excluding data/raw/ alone is NOT enough -- the parsed files carry the same content.
+# NB: comments MUST be on their own line; a trailing "# ..." becomes part of the pattern.
+
+# 268 real deep-research dossiers
+data/raw/
+# chunks.jsonl = FULL verbatim report text; persons.jsonl = 268 real names
+data/parsed/
+# embeddings: regenerable, and source text is partially recoverable from vectors
+data/cache/
+data/deep_research_reports
+data/mapping
+
+# --- Eval gold set: contains verbatim corpus quotes + personal facts ---
+# (schema/rigor is shown publicly via eval/questions.example.jsonl instead)
+eval/questions.jsonl
+
+# --- Run artifacts ---
+# results.jsonl carries retrieved doc text + generated answers.
+# config.json / summary.json are pure metrics and safe to commit.
+runs/**/results.jsonl
+
+# --- Secrets ---
+.env
+.env.*
+*.key
+*.pem
+
+# --- Python ---
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
