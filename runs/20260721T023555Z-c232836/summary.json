@@ -1,0 +1,43 @@
+{
+  "hit_rate": {
+    "single-hop": {
+      "hit@1": {
+        "n": 5,
+        "rate": 0.6,
+        "ci95_halfwidth": 0.4294144850840502
+      },
+      "hit@3": {
+        "n": 5,
+        "rate": 0.8,
+        "ci95_halfwidth": 0.350615458871967
+      }
+    },
+    "multi-hop": {
+      "hit@1": {
+        "n": 3,
+        "rate": 0.0,
+        "ci95_halfwidth": 0.0
+      },
+      "hit@3": {
+        "n": 3,
+        "rate": 0.0,
+        "ci95_halfwidth": 0.0
+      }
+    },
+    "answerable_overall": {
+      "hit@1": {
+        "n": 8,
+        "rate": 0.375,
+        "ci95_halfwidth": 0.33548006647191425
+      },
+      "hit@3": {
+        "n": 8,
+        "rate": 0.5,
+        "ci95_halfwidth": 0.3464823227814083
+      }
+    }
+  },
+  "groundedness": null,
+  "correctness": null,
+  "abstention": null
+}

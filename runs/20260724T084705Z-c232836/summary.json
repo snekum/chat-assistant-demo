@@ -1,0 +1,92 @@
+{
+  "hit_rate": {
+    "single-hop": {
+      "hit@1": {
+        "n": 41,
+        "successes": 26,
+        "rate": 0.6341463414634146,
+        "ci_lo": 0.48120423252161243,
+        "ci_hi": 0.764103695830632
+      },
+      "hit@3": {
+        "n": 41,
+        "successes": 29,
+        "rate": 0.7073170731707317,
+        "ci_lo": 0.5552024292386029,
+        "ci_hi": 0.8239098236694111
+      }
+    },
+    "multi-hop": {
+      "hit@1": {
+        "n": 2,
+        "successes": 0,
+        "rate": 0.0,
+        "ci_lo": 0.0,
+        "ci_hi": 0.6576280471103807
+      },
+      "hit@3": {
+        "n": 2,
+        "successes": 0,
+        "rate": 0.0,
+        "ci_lo": 0.0,
+        "ci_hi": 0.6576280471103807
+      }
+    },
+    "answerable_overall": {
+      "hit@1": {
+        "n": 43,
+        "successes": 26,
+        "rate": 0.6046511627906976,
+        "ci_lo": 0.4557879659331908,
+        "ci_hi": 0.7363489380154359
+      },
+      "hit@3": {
+        "n": 43,
+        "successes": 29,
+        "rate": 0.6744186046511628,
+        "ci_lo": 0.5251593250655096,
+        "ci_hi": 0.7950688481822019
+      }
+    }
+  },
+  "span_recall": {
+    "single-hop": {
+      "span_recall@1": {
+        "macro": 0.6341463414634146,
+        "micro": 0.6341463414634146
+      },
+      "span_recall@3": {
+        "macro": 0.7073170731707317,
+        "micro": 0.7073170731707317
+      }
+    },
+    "multi-hop": {
+      "span_recall@1": {
+        "macro": 0.5,
+        "micro": 0.5
+      },
+      "span_recall@3": {
+        "macro": 0.5,
+        "micro": 0.5
+      }
+    },
+    "answerable_overall": {
+      "span_recall@1": {
+        "macro": 0.627906976744186,
+        "micro": 0.6222222222222222
+      },
+      "span_recall@3": {
+        "macro": 0.6976744186046512,
+        "micro": 0.6888888888888889
+      }
+    }
+  },
+  "mrr": {
+    "single-hop": 0.7126036385052992,
+    "multi-hop": 1.0,
+    "answerable_overall": 0.7259709111329596
+  },
+  "groundedness": null,
+  "correctness": null,
+  "abstention": null
+}

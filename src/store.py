@@ -99,3 +99,23 @@ def search(conn: psycopg.Connection, qvec: np.ndarray, k: int = 3,
         cur.execute(sql, {"q": qvec, "pid": person_id, "k": k})
         cols = [d.name for d in cur.description]
         return [dict(zip(cols, row)) for row in cur.fetchall()]
+
+
+def rank_all(conn: psycopg.Connection, qvec: np.ndarray,
+             person_id: str | None = None) -> list[dict[str, Any]]:
+    """FULL ranking (doc_id + score only, NO text) for the gold-rank / MRR diagnostics
+    (D-018 option c). The exact seqscan already orders every chunk by distance -- search()
+    just discards everything past LIMIT k; here we record the whole ordering so a buried-fact
+    miss (gold at rank 67) is visible instead of collapsing to `hit@3: false`. Text is omitted
+    to keep the artifact small -- the gold-quote span match already ran on the top-k in search().
+    Distinct from search(): this returns ALL rows and no text; it is a diagnostic, not the
+    context the generator sees."""
+    where = "WHERE person_id = %(pid)s" if person_id else ""
+    sql = f"""
+        SELECT doc_id, 1 - (embedding <=> %(q)s) AS score
+        FROM chunks {where}
+        ORDER BY embedding <=> %(q)s
+    """
+    with conn.cursor() as cur:
+        cur.execute(sql, {"q": qvec, "pid": person_id})
+        return [{"doc_id": doc_id, "score": float(score)} for doc_id, score in cur.fetchall()]

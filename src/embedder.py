@@ -71,14 +71,24 @@ class NomicLocal:
     _QUERY_PREFIX = "search_query: "
 
     def __init__(self, batch_size: int = DEFAULT_BATCH_SIZE, use_cache: bool = True):
-        from sentence_transformers import SentenceTransformer
-
-        self._model = SentenceTransformer(f"nomic-ai/{self.model_id}", trust_remote_code=True)
+        # Lazy model load: the sentence-transformers/torch import is deferred to the first cache
+        # MISS (_ensure_model), so a fully-cached run -- e.g. re-scoring the eval queries, whose
+        # vectors are already on disk -- never loads torch. Concrete on this machine, where
+        # Windows Application Control blocks torch's DLLs (the same wall as spaCy, D-005): cached
+        # diagnostics still run. This is the D-015 cache paying off -- a full hit needs no model.
         self.batch_size = batch_size
         self._cache = EmbeddingCache(self.model_id) if use_cache else None
+        self._model = None
+
+    def _ensure_model(self):
+        if self._model is None:
+            from sentence_transformers import SentenceTransformer
+
+            self._model = SentenceTransformer(f"nomic-ai/{self.model_id}", trust_remote_code=True)
+        return self._model
 
     def _encode(self, prefixed: list[str]) -> np.ndarray:
-        return self._model.encode(
+        return self._ensure_model().encode(
             prefixed,
             batch_size=self.batch_size,
             normalize_embeddings=True,

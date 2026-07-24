@@ -1,0 +1,128 @@
+{
+  "hit_rate": {
+    "single-hop": {
+      "hit@1": {
+        "n": 5,
+        "successes": 3,
+        "rate": 0.6,
+        "ci_lo": 0.23071993220883708,
+        "ci_hi": 0.8823817688407467
+      },
+      "hit@3": {
+        "n": 5,
+        "successes": 4,
+        "rate": 0.8,
+        "ci_lo": 0.3755282641185388,
+        "ci_hi": 0.9637768390302125
+      }
+    },
+    "multi-hop": {
+      "hit@1": {
+        "n": 3,
+        "successes": 0,
+        "rate": 0.0,
+        "ci_lo": 0.0,
+        "ci_hi": 0.5615060804490177
+      },
+      "hit@3": {
+        "n": 3,
+        "successes": 0,
+        "rate": 0.0,
+        "ci_lo": 0.0,
+        "ci_hi": 0.5615060804490177
+      }
+    },
+    "answerable_overall": {
+      "hit@1": {
+        "n": 8,
+        "successes": 3,
+        "rate": 0.375,
+        "ci_lo": 0.13684175946152105,
+        "ci_hi": 0.6942621454161981
+      },
+      "hit@3": {
+        "n": 8,
+        "successes": 4,
+        "rate": 0.5,
+        "ci_lo": 0.21521252682444186,
+        "ci_hi": 0.7847874731755582
+      }
+    }
+  },
+  "span_recall": {
+    "single-hop": {
+      "span_recall@1": {
+        "macro": 0.6,
+        "micro": 0.6
+      },
+      "span_recall@3": {
+        "macro": 0.8,
+        "micro": 0.8
+      }
+    },
+    "multi-hop": {
+      "span_recall@1": {
+        "macro": 0.5,
+        "micro": 0.5
+      },
+      "span_recall@3": {
+        "macro": 0.5,
+        "micro": 0.5
+      }
+    },
+    "answerable_overall": {
+      "span_recall@1": {
+        "macro": 0.5625,
+        "micro": 0.5454545454545454
+      },
+      "span_recall@3": {
+        "macro": 0.6875,
+        "micro": 0.6363636363636364
+      }
+    }
+  },
+  "mrr": {
+    "single-hop": 0.7033333333333334,
+    "multi-hop": 0.6759259259259259,
+    "answerable_overall": 0.6930555555555555
+  },
+  "groundedness": {
+    "primary_over_non_refusal": {
+      "n": 6,
+      "successes": 6,
+      "rate": 1.0,
+      "ci_lo": 0.6096569663469354,
+      "ci_hi": 0.9999999999999999
+    },
+    "answerable_answered": {
+      "n": 6,
+      "successes": 6,
+      "rate": 1.0,
+      "ci_lo": 0.6096569663469354,
+      "ci_hi": 0.9999999999999999
+    }
+  },
+  "correctness": {
+    "n": 12,
+    "successes": 8,
+    "rate": 0.6666666666666666,
+    "ci_lo": 0.3906175873976138,
+    "ci_hi": 0.8618821601026385
+  },
+  "abstention": {
+    "abstention_accuracy": {
+      "n": 4,
+      "successes": 4,
+      "rate": 1.0,
+      "ci_lo": 0.5100999795960008,
+      "ci_hi": 1.0
+    },
+    "false_refusal_rate": {
+      "n": 8,
+      "successes": 2,
+      "rate": 0.25,
+      "ci_lo": 0.07147768885802763,
+      "ci_hi": 0.5907301208974108
+    }
+  }
+}

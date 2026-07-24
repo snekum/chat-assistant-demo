@@ -49,6 +49,10 @@ check for each row's type:
     e.g. the two Solaru subjects) as a resolution risk (GAPS G-001).
   - `gold_answer` must actually answer the question and be supported by the evidence quotes,
     not by world knowledge (D-013 contamination).
+  - **hit@k is doc_id-anchored** (D-011 amendment 2026-07-24): a gold quote counts as a HIT
+    only if the GOLD doc is retrieved AND contains it — so a non-unique quote ("Santa Clara
+    University", in 15 docs) can no longer cause a false hit, and you needn't reject generic
+    quotes. Still prefer questions that NAME their subject so the query resolves to the gold doc.
 
 ## Report back
 
