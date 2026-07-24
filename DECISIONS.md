@@ -440,3 +440,46 @@ protocol. Step-3 interrogation runs against these.
 - Revisit when: chunking + embedder frozen -> cut full-ranking to threshold-N (above); or the
   corpus grows past ~10^4 where full-ranking-per-question artifacts bloat and option (a)'s
   targeted count becomes the scalable path (premature at 268).
+
+## D-019: Refusal label — deterministic string vs judge (Tier-1 item 5)
+- Date: 2026-07-24
+- Context: `is_refusal` is the per-answer label that does DOUBLE duty — it scores both abstention
+  lanes (abstention_accuracy, false_refusal_rate) AND filters the PRIMARY groundedness
+  denominator (only non-refusals are grounded, run.py). It shipped as the JUDGE's semantic
+  boolean: a drift-prone model sitting inside the primary metric. But the generation contract
+  (f6-v1) already MANDATES an exact refusal sentence ("I don't know based on the provided
+  reports."), so a deterministic detector is available for free. The online lanes have never
+  executed, so whether Haiku actually emits the exact string is unmeasured.
+- Options:
+  - Judge-only (status quo): semantic `is_refusal` drives the metrics. Catches hedged/off-script
+    refusals, but a model boolean drives the primary denominator and can drift across runs; a
+    judge false-"refusal" would exclude a possible hallucination from groundedness (the
+    reputational-risk direction, D-009).
+  - String-only: deterministic normalized-EQUALITY match against the mandated sentence.
+    Drift-proof, contamination-proof, and can't wrongly pull a real answer out of the denominator
+    (a substantive answer never normalizes to exactly the refusal sentence); but a refusal in the
+    bot's own words scores as a non-refusal (undercounts abstention IF the bot goes off-script).
+  - Both — string-authoritative + judge cross-check + divergence log (CHOSEN): string drives the
+    metrics; judge `is_refusal` is recorded; disagreements are counted (judge_divergence_n/rate/
+    divergent_ids) as the alarm that the bot went off-script, and as a G-002 calibration feed.
+- Decision: Record both. `refusal_exact` (normalized equality, reusing the D-011 normalizer) is
+  the OFFICIAL label for abstention + the groundedness filter; judge `is_refusal` kept as a
+  recorded cross-check; divergence logged in the abstention block. REFUSAL_STRING extracted as a
+  named constant in generate.py so the detector and the prompt can't drift (SYSTEM text
+  byte-identical -> f6-v1 unchanged). Cost/latency are non-differentiators (no extra API call —
+  both labels come from data already collected).
+- My reason: Start with the dumbest thing that still measures — a plain string check on the exact
+  sentence I already tell the bot to use — keep a drifty model out of my primary metric, then
+  measure and only graduate to the judge's semantic label if the divergence log shows the bot
+  won't obey "reply exactly." I don't yet know if it goes off-script; the divergence count is
+  what will tell me.
+- Revisit when: the smoke run (1b) shows material divergence AND inspection shows the divergent
+  cases are genuine off-script refusals (not judge errors) -> either tighten the contract (bump
+  f6-v2) or promote the judge to official. No cutoff pre-committed before data (same posture as
+  D-013's closed-book threshold). `# TUNABLE(equality not containment; symptom wrong: divergence
+  fills with genuine refusals that merely appended a citation/token -> loosen to containment.)`
+- Steelman (judge-authoritative, logged once): for abstention questions specifically, a refusal
+  in the bot's own words is genuinely CORRECT behavior, and string-only scores it as a
+  non-refusal — so if the bot hedges often, the judge measures the metric I care most about (did
+  it correctly decline?) more faithfully than the string. The judge wins the moment the
+  divergence log shows the bot won't obey the exact-string contract.

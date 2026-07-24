@@ -36,8 +36,10 @@ from dotenv import load_dotenv  # noqa: E402
 
 load_dotenv()  # read .env into os.environ (does NOT override real shell exports) -> keys visible
 
+import cost  # noqa: E402
 import generate  # noqa: E402
 import hitrate  # noqa: E402
+import normalize  # noqa: E402
 import store  # noqa: E402
 from retrieve import DEFAULT_K, Retriever  # noqa: E402
 from stats import wilson_interval  # noqa: E402
@@ -74,6 +76,24 @@ def gold_rank(doc_id: str, full_ranking: list[dict]) -> int | None:
         if row["doc_id"] == doc_id:
             return i
     return None  # gold doc absent from the corpus -- a data error the validator should have caught
+
+
+def is_exact_refusal(answer: str) -> bool:
+    """Deterministic refusal detector (D-019, Tier-1 item 5): did the answer match the EXACT
+    refusal sentence the contract mandates (generate.REFUSAL_STRING)? This is now the OFFICIAL
+    refusal label -- it drives abstention scoring and filters the groundedness denominator; the
+    judge's semantic is_refusal is kept only as a recorded cross-check (see summarize()).
+
+    Normalized EQUALITY under the D-011 normalizer (not containment): a substantive answer can't
+    normalize to EXACTLY the refusal sentence, so this can never wrongly pull a real answer out
+    of the groundedness denominator (the reputational-risk direction, D-009). An off-script
+    refusal (the bot's own words) reads False here and surfaces in the judge-divergence log --
+    which is the point: that log is how we learn, at smoke-run 1b, whether the bot obeys "reply
+    exactly" before we'd ever trust a smarter (judge) label instead.
+    # TUNABLE(equality not containment; revisit at 1b. Symptom wrong: divergence log fills with
+    #   genuine refusals that merely appended a citation/token -> loosen to normalized containment.)
+    """
+    return normalize.normalize_for_match(answer) == normalize.normalize_for_match(generate.REFUSAL_STRING)
 
 
 def main() -> None:
@@ -121,10 +141,12 @@ def main() -> None:
             "spans_found@3": None,
             "spans_total": None,
             "answer": None,
-            "is_refusal": None,
+            "is_refusal": None,      # judge's semantic call -- CROSS-CHECK only under D-019
+            "refusal_exact": None,   # deterministic string match -- OFFICIAL label (D-019); null offline
             "grounded": None,
             "correct": None,
             "judge_reason": {"groundedness": None, "correctness": None},
+            "cost": None,  # per-stage tokens/latency/$ (item 4); null on offline runs
         }
 
         if r["type"] in ANSWERABLE:  # abstention has no gold span -> retrieval metrics N/A
@@ -142,17 +164,26 @@ def main() -> None:
             rec["mrr"] = 1.0 / min(valid) if valid else None  # best-placed gold (D-018 MRR note)
 
         if api:
-            answer = generator.answer(r["question"], retrieved)
+            answer, gen_meta = generator.answer(r["question"], retrieved)
             context = generate.format_context(retrieved)
-            g = judge.groundedness(r["question"], context, answer)
-            c = judge.correctness(r["question"], r["gold_answer"], answer)
+            g, g_meta = judge.groundedness(r["question"], context, answer)
+            c, c_meta = judge.correctness(r["question"], r["gold_answer"], answer)
             rec.update(
                 answer=answer,
                 is_refusal=g["is_refusal"],
+                refusal_exact=is_exact_refusal(answer),  # deterministic OFFICIAL label (D-019)
                 grounded=g["grounded"],
                 correct=c["correct"],
                 judge_reason={"groundedness": g["reason"], "correctness": c["reason"]},
             )
+            stages = {"generation": gen_meta, "groundedness": g_meta, "correctness": c_meta}
+            for m in stages.values():
+                m["cost_usd"] = cost.cost_usd(m)  # price the raw usage (item 4)
+            rec["cost"] = {
+                "stages": stages,
+                "total_usd": round(sum(m["cost_usd"] or 0 for m in stages.values()), 6),
+                "total_latency_s": round(sum(m["latency_s"] for m in stages.values()), 3),
+            }
 
         results.append(rec)
         rankings.append({
@@ -250,20 +281,48 @@ def summarize(rows: list[dict], results: list[dict], api: bool) -> dict:
     mrr["answerable_overall"] = macro(lambda x: x["mrr"], answerable)
 
     summary: dict = {"hit_rate": hit, "span_recall": span, "mrr": mrr,
-                     "groundedness": None, "correctness": None, "abstention": None}
+                     "groundedness": None, "correctness": None, "abstention": None,
+                     "cost": None}
     if api:
-        answered = [x for x in answerable if not x["is_refusal"]]  # substantive answers only
-        non_refusal = [x for x in results if not x["is_refusal"]]
+        # OFFICIAL refusal label = deterministic refusal_exact (D-019); judge is_refusal is the
+        # recorded cross-check. The label both scores abstention AND filters what gets grounded.
+        answered = [x for x in answerable if not x["refusal_exact"]]  # substantive answers only
+        non_refusal = [x for x in results if not x["refusal_exact"]]
         summary["groundedness"] = {  # PRIMARY: of substantive answers, fraction fully supported
             "primary_over_non_refusal": binom(lambda x: x["grounded"], non_refusal),
             "answerable_answered": binom(lambda x: x["grounded"], answered),
         }
         summary["correctness"] = binom(lambda x: x["correct"], results)  # secondary; per-type = item 7
         abst = [x for x in results if x["type"] == "abstention"]
-        summary["abstention"] = {  # two-sided (Default l)
-            "abstention_accuracy": binom(lambda x: x["is_refusal"], abst),
-            "false_refusal_rate": binom(lambda x: x["is_refusal"], answerable),
+        labeled = [x for x in results if x["refusal_exact"] is not None]  # both labels exist (api)
+        divergent = [x for x in labeled if x["refusal_exact"] != x["is_refusal"]]
+        summary["abstention"] = {  # two-sided (Default l); label = deterministic refusal_exact (D-019)
+            "abstention_accuracy": binom(lambda x: x["refusal_exact"], abst),
+            "false_refusal_rate": binom(lambda x: x["refusal_exact"], answerable),
+            "refusal_label": {  # judge kept as cross-check; divergence = the bot went off-script
+                "official": "refusal_exact",
+                "judge_divergence_n": len(divergent),
+                "judge_divergence_rate": round(len(divergent) / len(labeled), 3) if labeled else None,
+                "divergent_ids": [x["id"] for x in divergent],
+            },
         }
+        priced = [x["cost"] for x in results if x.get("cost")]  # per-stage tokens/$/latency (item 4)
+        if priced:
+            n = len(priced)
+            summary["cost"] = {
+                "prices_dated": cost.PRICES_DATED,
+                "total_usd": round(sum(c["total_usd"] for c in priced), 4),
+                "mean_usd_per_question": round(sum(c["total_usd"] for c in priced) / n, 4),
+                "by_stage": {
+                    st: {
+                        "input_tokens": sum(c["stages"][st]["input_tokens"] for c in priced),
+                        "output_tokens": sum(c["stages"][st]["output_tokens"] for c in priced),
+                        "total_usd": round(sum(c["stages"][st]["cost_usd"] or 0 for c in priced), 4),
+                        "mean_latency_s": round(sum(c["stages"][st]["latency_s"] for c in priced) / n, 3),
+                    }
+                    for st in ("generation", "groundedness", "correctness")
+                },
+            }
     return summary
 
 
@@ -298,6 +357,18 @@ def report(run_id: str, out_dir: Path, summary: dict, api: bool) -> None:
         a = summary["abstention"]
         print(f"abstention-accuracy: {fmt(a['abstention_accuracy'])}  |  "
               f"false-refusal rate: {fmt(a['false_refusal_rate'])}")
+        rl = a["refusal_label"]
+        dr = "n/a" if rl["judge_divergence_rate"] is None else f"{rl['judge_divergence_rate']:.0%}"
+        line = f"refusal label: OFFICIAL=refusal_exact (deterministic) | judge divergence: {rl['judge_divergence_n']} ({dr})"
+        if rl["divergent_ids"]:
+            line += f" ids={rl['divergent_ids']}"
+        print(line)
+        if summary.get("cost"):
+            cst = summary["cost"]
+            by = cst["by_stage"]
+            print(f"cost: ${cst['total_usd']:.4f} total, ${cst['mean_usd_per_question']:.4f}/question "
+                  f"(gen ${by['generation']['total_usd']:.4f} / ground ${by['groundedness']['total_usd']:.4f} "
+                  f"/ correct ${by['correctness']['total_usd']:.4f}; prices {cst['prices_dated']})")
     else:
         print("groundedness / correctness / abstention: SKIPPED (no ANTHROPIC_API_KEY).")
 
