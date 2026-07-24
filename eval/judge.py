@@ -83,6 +83,20 @@ _CORRECTNESS_SCHEMA = {
 }
 
 
+def _usage_meta(resp, model: str, latency_s: float) -> dict:
+    """Per-call token usage + latency (Tier-1 item 4). Mirrors generate.usage_meta; duplicated
+    (not imported) so the judge stays independent of the generator module."""
+    u = resp.usage
+    return {
+        "model": model,
+        "latency_s": round(latency_s, 3),
+        "input_tokens": u.input_tokens,
+        "output_tokens": u.output_tokens,
+        "cache_read_tokens": getattr(u, "cache_read_input_tokens", 0) or 0,
+        "cache_creation_tokens": getattr(u, "cache_creation_input_tokens", 0) or 0,
+    }
+
+
 class Judge:
     """Holds one Anthropic client; runs the two lanes. Thinking disabled + structured output
     for stability, since temperature is not tunable on the Sonnet-5 judge (see module docstring)."""
@@ -93,9 +107,13 @@ class Judge:
         self.model = model
         self._client = anthropic.Anthropic()
 
-    def _call(self, system: str, user: str, schema: dict) -> dict:
+    def _call(self, system: str, user: str, schema: dict) -> tuple[dict, dict]:
+        """-> (verdict, meta). meta = raw token usage + wall-clock latency (Tier-1 item 4);
+        eval/cost.py prices it. The judge is where most of the run's $ goes (Sonnet tier)."""
         import json
+        import time
 
+        t0 = time.perf_counter()
         resp = self._client.messages.create(
             model=self.model,
             max_tokens=MAX_TOKENS,
@@ -104,17 +122,18 @@ class Judge:
             output_config={"format": {"type": "json_schema", "schema": schema}},
             messages=[{"role": "user", "content": user}],
         )
+        latency_s = time.perf_counter() - t0
         text = next(b.text for b in resp.content if b.type == "text")
-        return json.loads(text)
+        return json.loads(text), _usage_meta(resp, self.model, latency_s)
 
-    def groundedness(self, question: str, context: str, answer: str) -> dict:
-        """PRIMARY lane. Sees context + answer, NEVER gold. -> {is_refusal, grounded, reason}."""
+    def groundedness(self, question: str, context: str, answer: str) -> tuple[dict, dict]:
+        """PRIMARY lane. Sees context + answer, NEVER gold. -> ({is_refusal, grounded, reason}, meta)."""
         user = (
             f"QUESTION:\n{question}\n\nRETRIEVED REPORTS:\n{context}\n\nANSWER:\n{answer}"
         )
         return self._call(_GROUNDEDNESS_SYSTEM, user, _GROUNDEDNESS_SCHEMA)
 
-    def correctness(self, question: str, gold: str, answer: str) -> dict:
-        """SECONDARY lane. Sees gold + answer. -> {correct, reason}."""
+    def correctness(self, question: str, gold: str, answer: str) -> tuple[dict, dict]:
+        """SECONDARY lane. Sees gold + answer. -> ({correct, reason}, meta)."""
         user = f"QUESTION:\n{question}\n\nGOLD ANSWER:\n{gold}\n\nANSWER:\n{answer}"
         return self._call(_CORRECTNESS_SYSTEM, user, _CORRECTNESS_SCHEMA)

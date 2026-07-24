@@ -29,6 +29,12 @@ GENERATOR_MODEL = "claude-haiku-4-5"
 # TUNABLE(1024; revisit if answers truncate -- stop_reason == "max_tokens")
 MAX_TOKENS = 1024
 
+# The exact refusal sentence the contract mandates (rule 2 below). Extracted as a named
+# constant so the deterministic refusal detector (eval/run.is_exact_refusal, D-019) checks for
+# the SAME string the prompt demands -- the two can never silently drift apart. Interpolated in
+# place below, so the SYSTEM text stays byte-identical to f6-v1 (contract version unchanged).
+REFUSAL_STRING = "I don't know based on the provided reports."
+
 SYSTEM = (
     "You answer questions about a corpus of professional dossiers on business leaders, using "
     "ONLY the reports provided in the user message.\n"
@@ -36,7 +42,7 @@ SYSTEM = (
     "1. Use only the provided reports. Do not use any outside or prior knowledge, even if you "
     "recognize the person.\n"
     "2. If the answer is not stated in the provided reports, say you don't know -- reply "
-    "exactly: \"I don't know based on the provided reports.\" Do not guess or infer beyond "
+    f'exactly: "{REFUSAL_STRING}" Do not guess or infer beyond '
     "what is written.\n"
     "3. Cite your source: after each claim, name the report(s) it came from in square "
     "brackets, e.g. [Aaron Silva]. Every factual sentence must carry a citation.\n"
@@ -57,6 +63,21 @@ def format_context(retrieved: list[dict]) -> str:
     return "\n\n".join(blocks)
 
 
+def usage_meta(resp, model: str, latency_s: float) -> dict:
+    """Per-call token usage + latency, as a plain JSON-able dict (Tier-1 item 4). cache_* are
+    0 here (these calls set no cache_control) but are recorded so Phase-5 monitoring gets them
+    for free. Pricing lives in eval/cost.py, applied by the eval harness -- not here."""
+    u = resp.usage
+    return {
+        "model": model,
+        "latency_s": round(latency_s, 3),
+        "input_tokens": u.input_tokens,
+        "output_tokens": u.output_tokens,
+        "cache_read_tokens": getattr(u, "cache_read_input_tokens", 0) or 0,
+        "cache_creation_tokens": getattr(u, "cache_creation_input_tokens", 0) or 0,
+    }
+
+
 class Generator:
     """Holds one Anthropic client. Answers a question from the retrieved context, or refuses."""
 
@@ -66,8 +87,14 @@ class Generator:
         self.model = model
         self._client = anthropic.Anthropic()
 
-    def answer(self, question: str, retrieved: list[dict]) -> str:
+    def answer(self, question: str, retrieved: list[dict]) -> tuple[str, dict]:
+        """Returns (answer_text, meta). meta carries per-call token usage + wall-clock latency
+        (Tier-1 item 4), as RAW numbers -- eval/cost.py turns them into dollars. Kept
+        pricing-free so the generator (system-under-test) never imports the eval harness."""
+        import time
+
         user = f"Reports:\n\n{format_context(retrieved)}\n\nQuestion: {question}"
+        t0 = time.perf_counter()
         resp = self._client.messages.create(
             model=self.model,
             max_tokens=MAX_TOKENS,
@@ -75,4 +102,6 @@ class Generator:
             system=SYSTEM,
             messages=[{"role": "user", "content": user}],
         )
-        return "".join(b.text for b in resp.content if b.type == "text").strip()
+        latency_s = time.perf_counter() - t0
+        text = "".join(b.text for b in resp.content if b.type == "text").strip()
+        return text, usage_meta(resp, self.model, latency_s)
