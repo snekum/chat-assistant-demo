@@ -18,3 +18,23 @@
   reputational-risk failure D-009 was written to prevent (owner's own D-009 reason).
 - Status: OPEN. Resolution LOGIC stays deferred (D-016), but the eval to catch its failure
   should be designed alongside Component 2 so the gap is measured, not assumed away.
+
+## G-002: Judge calibration / drift-alarm protocol is undefined
+- Date: 2026-07-21
+- Component: 2 (LLM-as-judge, D-010)
+- Gap: D-010 pre-registers "~20 human-checked judgments per rubric version" as a drift alarm,
+  but the operational protocol is unspecified: (1) which verdicts to hand-check (random?
+  stratified by lane × question type? disagreement-prone ones?), (2) what human/judge agreement
+  threshold trips the alarm, (3) what happens to runs ALREADY written under the current rubric
+  version when it trips (re-score / invalidate / annotate?).
+- Why it matters: the judge is the ruler (D-010); an uncalibrated ruler silently mis-scores
+  groundedness, which is the PRIMARY metric. Without a threshold + a defined response,
+  "spot-check ~20" is theater, not a control.
+- Owner could not answer under interrogation (2026-07-21): "gap."
+- Shape of a fix (not a decision — for the owner to make later): stratify the ~20 across both
+  lanes and all three types, INCLUDING the abstention/refusal calls; author human labels blind
+  to the judge's verdict; report simple agreement now (Cohen's kappa once N is bigger); set the
+  alarm threshold as a TUNABLE with a stated symptom; on trip, cut a NEW rubric version and
+  re-score ALL runs under it (never mix versions, per D-010) rather than patching in place.
+- Status: OPEN. Tied to D-010; resolve before judge numbers are trusted as config COMPARISONS
+  (they're fine as directional signals now).

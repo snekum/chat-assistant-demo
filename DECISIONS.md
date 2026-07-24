@@ -167,6 +167,13 @@ protocol. Step-3 interrogation runs against these.
   sample as insurance against its drift.
 - Revisit when: human/judge agreement on the calibration sample diverges, OR the rubric
   changes (then re-score ALL runs under the new version — never mix versions).
+- Temp-0 amendment (2026-07-22): D-010's literal "temp 0" is NOT settable on the shipped judge —
+  claude-sonnet-5 rejects a non-default temperature (400). Shipped resolution (already in
+  judge.py): omit temperature; pin stability via fixed rubric + disabled thinking + json_schema
+  structured output. Judge stays Sonnet-class, never the generator's Haiku tier, so D-010's real
+  invariant (ruler outranks generator) holds. temp-0 determinism was never guaranteed anyway;
+  the residual non-determinism is MEASURED by the Phase-1e judge flip-rate (roadmap Tier-2
+  item 10), not asserted.
 
 ## D-011: Span-matching / hit-rate (F4)
 - Date: 2026-07-05
@@ -189,6 +196,20 @@ protocol. Step-3 interrogation runs against these.
   should be an exact match after cleaning, with no false-positive inflation of hit-rate.
 - Revisit when: real quotes still fail to match after normalization → fall back to a
   token-overlap threshold with an explicit TUNABLE value and a false-hit symptom.
+- Amendment — doc_id anchoring (2026-07-24): the shipped hit_at_k matched the gold quote
+  against ANY top-k chunk's text, with NO check that the chunk was the GOLD doc. That silently
+  assumed each gold quote uniquely identifies its doc — true for the 12 hand-authored seeds
+  (distinctive quotes), FALSE once LLM-assisted single-hop generation (D-012) introduced generic
+  quotes ("Santa Clara University" is in 15 docs, "Vice President of Operations" in 5). Failure
+  mode: retrieval MISSES the gold doc but a DIFFERENT doc containing the same phrase lands in
+  top-k → scored a FALSE HIT, inflating hit-rate and hiding the miss. Fix: hit@k (and
+  span-recall) now require `retrieved.doc_id == gold.doc_id AND quote in that chunk` — the quote
+  pins the section (survives section-chunking), the doc_id pins the person. This aligns hit@k with
+  gold_rank, which already matched on doc_id (the two used inconsistent rules before). Surfaced by
+  a cross-doc quote-collision scan while reviewing the first LLM batch. No baseline-of-record
+  existed yet, so no history to re-score; the amended definition is the one the baseline uses.
+  The eval-goldset-review skill did NOT catch this — it reviews the QUESTION SET, not the scorer,
+  and checked quote containment, never uniqueness (a dormant risk absent from the seed data).
 
 ## D-012: Question-set construction (F5)
 - Date: 2026-07-05
@@ -205,6 +226,24 @@ protocol. Step-3 interrogation runs against these.
   my own thinking to make the set exhaustive, using LLMs only to brainstorm together.
 - Revisit when: hand-authored n is too small to separate two configs (confidence
   intervals overlap) → grow single-hop via verified LLM expansion.
+- Sizing derivation (2026-07-24; n=12 pilot → ~45 target). "Why 45" is COMPUTED, not
+  guessed, and two independent calcs agree:
+  - Precision (Job A, one config's band): a Wilson/normal half-width w at rate p needs
+    n ≈ (1.96/w)² · p(1−p). At the pilot's single-hop p≈0.6: ±0.20→~23, ±0.14→~47,
+    ±0.10→~94, ±0.07→~188. 45 buys ≈±0.14. Halving the band costs ~4× n (the 1/√n wall),
+    so we stop at "narrow enough to decide," not "narrow."
+  - Power (Job B, the Phase-2 chunking A/B — the binding calc): pre-registered δ=0.30,
+    α=.05, power=.80 → ~42/ARM with independent CIs. Drops to ~30–45 TOTAL because the
+    A/B is PAIRED (same Qs both configs) and near-one-directional, so McNemar counts only
+    discordant pairs (~8/p_flip). This is the "why 45 not 84" argument (see item 11).
+  - The n=12 run was the PILOT that supplies p and the rough effect for both formulas.
+  - Growth trigger is PRE-COMMITTED, not eyeballed: → ~75 ONLY IF the A/B delta lands
+    inside the CIs (effect smaller than the 30 pts we powered for ⇒ underpowered for THIS
+    effect). NOT "if the bands still look broad" — that trigger is optional-stopping /
+    p-hacking (peek-and-stop manufactures false positives). `# TUNABLE(n=45 powered for
+    δ=0.30 paired; revisit when the measured A/B effect < 0.30 → recompute n from the
+    observed p_flip, grow toward ~75. Symptom too-small: A/B discordant count < ~8/p_flip
+    ⇒ McNemar can't reach significance.)`
 
 ## D-013: Real-entity contamination
 - Date: 2026-07-05
@@ -224,7 +263,34 @@ protocol. Step-3 interrogation runs against these.
   contamination is pointless. And at scale (thousands of users) per-corpus anonymization
   is impractical when the grounding checks already catch ungrounded claims.
 - Revisit when: correctness reads high while hit-rate stays flat (answers bypassing
-  retrieval) → reconsider the cheap names-only swap.
+  retrieval) → reconsider the cheap names-only swap. That (high-correctness × low-hit-rate)
+  cell is the contamination signature caught in the wild — gold doc not retrieved yet the
+  answer is right, so it came from pretraining — but it is cheap and n-starved (only fires on
+  questions retrieval happens to miss).
+- Trigger, measured (Phase 1d, closed-book control = roadmap item 14): run the generator with
+  EMPTY context and score correctness on the contamination-prone answerable questions.
+  Closed-book correctness = the share of correctness that is retrieval-INDEPENDENT (pure
+  memory); open−closed = retrieval's actual lift. High closed-book correctness ⇒ correctness
+  is grading Haiku's memory of these real people, not the RAG → fire the names-only swap.
+  Threshold = TUNABLE set at 1d against the observed closed-book distribution; no cutoff
+  pre-committed before data.
+- Drill-closed (2026-07-22): owner articulated the joint signature and derived the closed-book
+  control. Qualifier the drill exposed — the "My reason" above is INCOMPLETE as written:
+  groundedness catches a pretraining claim only when the retrieved context does NOT already
+  contain the fact; when pretraining and context agree, groundedness returns true, so it
+  proves SUPPORT, not that retrieval was load-bearing. Neither groundedness nor hit-rate can
+  establish load-bearing; only retrieval ablation (closed-book) can. Hence item 14 is the real
+  closer for D-013, with groundedness covering the unsupported-claim case.
+- Metric contamination-exposure (2026-07-22): hit-rate is contamination-PROOF (embedder + gold
+  quote only, no generator in the calc — memory can't move it); groundedness is contamination-
+  ROBUST (checks answer ⊆ context, so a memory answer that also sits in context is genuinely
+  grounded — it never gives a false green on hallucination, it just can't reveal source);
+  correctness is contamination-VULNERABLE (memory inflates the pass rate). Consequence: an
+  all-green row (hit + grounded + correct) is NOT a contamination worry — it is carried by the two
+  resistant metrics, and hit-rate independently certifies the retrieval capability memory was
+  suspected of masking. The dangerous false green is correctness-high × hit-rate-LOW (green answer,
+  retrieval absent). This is the architectural reason correctness stays SECONDARY + caveated, not a
+  headline.
 
 ## D-014: Vector index / store layer (Default e — vetoed by exception)
 - Date: 2026-07-18
@@ -302,3 +368,75 @@ protocol. Step-3 interrogation runs against these.
   resolution ambiguity bites (two Solaru subjects per D-004; real-world name collisions,
   e.g. the Ross Fernandes dossier flags an academic + a footballer) → build the
   disambiguating resolver.
+
+## D-017: Model provider (single-provider default; cross-provider judge deferred)
+- Date: 2026-07-21
+- Context: The generator (D-009 / Default h, `claude-haiku-4-5`) and the judge (D-010,
+  `claude-sonnet-5`) both run on Anthropic Claude. Provider was an INHERITED default, never
+  justified against alternatives until now (surfaced under interrogation, 2026-07-21). The
+  embedder is local nomic, so this touches only generation + judging — not retrieval.
+- Options:
+  - Single-provider (Anthropic) for both gen + judge — one SDK / key / billing surface, fewer
+    things that can silently drift; but the judge shares the generator's model family, so a
+    mild "Claude prefers Claude-shaped output" self-preference / family bias can't be ruled out
+    (the F3 conflict, only partly resolved by the Haiku↔Sonnet tier gap in D-010).
+  - Cross-provider JUDGE (a GPT-/Gemini-class judge grading the Claude generator) — strongest
+    kill for family bias; F3 lists cross-family as a legitimate option. Costs a second SDK /
+    key / failure-mode and a second thing that can change under you.
+  - Multi-provider generator too — max diversity, but the generator is already a per-run
+    variable (Default h) and multiplying providers there is scope with no measurement payoff.
+- Decision: Single-provider (Anthropic) for the baseline. A cross-provider judge is
+  PRE-REGISTERED as the response IF calibration shows family bias — not adopted blind.
+- My reason (confirmed 2026-07-22): Stay single-provider (Claude family) for the baseline —
+  cheapest tier for the generator (Haiku), one tier up for the judge (Sonnet), so the ruler
+  outranks the thing it grades. Escalate only on evidence, and note the two escalations are
+  different axes: bump the GENERATOR tier if measured numbers show it underperforming (a
+  cost/quality call, Default h), and move the JUDGE cross-family only if G-002 calibration shows
+  same-family bias (an independence call). I have OpenAI + Gemini keys on hand, but a second
+  provider is a second key and a second drift surface — not worth buying for diversity's sake; it
+  only earns that cost at the judge, once calibration data asks for it.
+- Revisit when: the G-002 judge-calibration sample shows the Sonnet judge systematically
+  over-rating Haiku-family (Claude) outputs vs the blind human labels → move the JUDGE
+  cross-family (the generator can stay Claude; it's the ruler that must be independent). Also
+  revisit on a provider outage / model deprecation that forces a swap.
+- Steelman (cross-provider judge, logged once): judge independence is the one axis where
+  provider diversity is a real quality gain, not just added complexity — a cross-family judge
+  cannot share the generator's blind spots by construction. The only reason to defer is that
+  G-002 hasn't yet told us whether same-family judging is measurably biased here.
+
+## D-018: Ranking-record depth (Phase 1a instrument, Tier-1 item 3)
+- Date: 2026-07-22
+- Context: store.search discards everything past `LIMIT k`; results.jsonl keeps only top-3. The
+  exact seqscan already ranks all 268 chunks (D-014), so gold-rank + MRR + a near/deep-miss
+  taxonomy are FREE to record and impossible to backfill into write-once runs. hit@1 stays the
+  only headline; ranks are the zero-cost diagnostic that routes the next build (miss at rank 2-5
+  = ranking problem -> rerank/bump-k; miss at rank 40+ = representation problem -> re-chunk).
+- Options:
+  - (a) gold-rank-only via a per-gold count query — cheapest, exact rank + MRR, but records
+    nothing about WHO outranked the gold (no wrong-person@1 taxonomy).
+  - (b) top-N (doc_id+score) — near-miss neighborhood + gold-rank if gold<=N; a deep gold (rank
+    67) records only as ">N", losing the exact rank; adds a silent N.
+  - (c) full 268-row ranking (doc_id+score, no text) — exact gold rank always, full MRR, complete
+    taxonomy, re-analysable forever; ~10 KB/question (~450 KB/run).
+- Decision: (c) full-ranking now, doc_id+score only (no text — the gold-quote match already ran
+  offline). Pre-registered migration to (b) threshold-N once the chunking strategy is frozen.
+- My reason: while I'm still figuring out chunking I need to see whether a miss is a near-miss
+  (ranking fix) or way off (re-chunk), so I rank everything — I'd do this at a company too, on a
+  few hundred docs even if the corpus is thousands. Once chunking is settled there's no reason to
+  rank everything; a threshold N suffices. And starting with (c) is what GIVES me the gold-rank
+  distribution to set that N empirically instead of guessing.
+- Threshold-N derivation (pre-registered, applied at migration): set N from the observed
+  gold-rank distribution of the FROZEN config, not a priori. N = max( near-miss-band tail [~95th
+  pct of gold-rank among questions a reranker could still rescue], distractor-head [top ~5-10, to
+  see who outranked the gold] ) — both modest, ~15-20 here. Past N collapses to ONE
+  "deep-miss / representation" bucket because the action (re-chunk) is identical for rank 40 vs
+  200. `# TUNABLE(N read off the frozen-config gold-rank curve; revisit when the embedder or
+  chunk scheme changes -> representation shift moves the distribution -> re-measure N or go full
+  again. Symptom too-small: a non-trivial fraction of gold lands in ">N" AND you keep needing the
+  exact deep rank to decide something.)`
+- MRR note: MRR is single-gold-natural; multi-hop records each gold doc's rank and feeds min-rank
+  (best-placed gold) as the MRR input, so the metric survives Phase-2 re-chunking (a doc's rank =
+  best rank among its chunks).
+- Revisit when: chunking + embedder frozen -> cut full-ranking to threshold-N (above); or the
+  corpus grows past ~10^4 where full-ranking-per-question artifacts bloat and option (a)'s
+  targeted count becomes the scalable path (premature at 268).

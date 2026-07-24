@@ -1,0 +1,44 @@
+{
+  "run_id": "20260724T084705Z-c232836",
+  "created_utc": "2026-07-24T08:47:41.287735+00:00",
+  "git": {
+    "sha": "c232836",
+    "dirty": true
+  },
+  "embedder": {
+    "id": "nomic-embed-text-v1.5",
+    "dim": 768
+  },
+  "generator": {
+    "id": "claude-haiku-4-5",
+    "prompt_contract_version": "f6-v1"
+  },
+  "judge": null,
+  "retrieval": {
+    "k": 3,
+    "distance": "cosine",
+    "index": "pgvector-exact (D-014)"
+  },
+  "seed": 42,
+  "normalizer": "eval/normalize.py:normalize_for_match (D-011)",
+  "ci_method": "wilson-score-95 (item 1; replaces Wald)",
+  "question_set": {
+    "path": "eval\\questions.jsonl",
+    "n": 47,
+    "by_type": {
+      "single-hop": 41,
+      "abstention": 4,
+      "multi-hop": 2
+    }
+  },
+  "stages": [
+    "retrieval",
+    "rank_diagnostics",
+    "hit_rate",
+    "span_recall"
+  ],
+  "artifacts": {
+    "rankings": "rankings.jsonl -- full 268-row ranking/question (D-018 c)"
+  },
+  "api_available": false
+}

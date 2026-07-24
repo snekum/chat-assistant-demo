@@ -14,11 +14,15 @@ data/mapping
 # --- Eval gold set: contains verbatim corpus quotes + personal facts ---
 # (schema/rigor is shown publicly via eval/questions.example.jsonl instead)
 eval/questions.jsonl
+# review_queue.jsonl = same content as questions.jsonl (verbatim quotes + real names) pre-merge.
+eval/review_queue.jsonl
 
 # --- Run artifacts ---
 # results.jsonl carries retrieved doc text + generated answers.
 # config.json / summary.json are pure metrics and safe to commit.
 runs/**/results.jsonl
+# rankings.jsonl lists ALL 268 doc_ids (real names) per question -- same leak as persons.jsonl.
+runs/**/rankings.jsonl
 
 # --- Secrets ---
 .env
