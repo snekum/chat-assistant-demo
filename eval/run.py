@@ -24,6 +24,7 @@ Usage:  ./.venv/Scripts/python.exe eval/run.py
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 import sys
 from datetime import datetime, timezone
@@ -96,6 +97,42 @@ def is_exact_refusal(answer: str) -> bool:
     return normalize.normalize_for_match(answer) == normalize.normalize_for_match(generate.REFUSAL_STRING)
 
 
+_CITE_TAG = re.compile(r"\[([^\]]+)\]")  # any [....] bracket in the answer text
+
+
+def parse_citations(answer: str, retrieved: list[dict]) -> dict:
+    """Deterministic citation validity check (D-020, Tier-1 item 6). The contract (f6-v1) makes
+    the generator tag every claim with a document-level [doc_id]; doc_id == the person's full
+    name. Here we read those tags back and ask, for each, whether it names one of the reports
+    actually RETRIEVED for this question -- NOT the whole corpus. A tag that names a doc the
+    generator was never shown is a FABRICATED citation: the exact "unverified citation launders
+    hallucinations" failure D-009 warns of, and a contamination tell (the name came from memory,
+    not the provided reports -- D-013).
+
+    Match = full-name normalized-exact (reuse the D-011 normalizer) against the retrieved doc_ids;
+    plural brackets are split on comma/semicolon because the contract sanctions "report(s)".
+    # TUNABLE(full-name match + comma/semicolon split; revisit when a surname-only [Silva], an odd
+    #   separator [X and Y], or a non-name bracket gets mis-flagged fabricated -> extend the matcher.)
+
+    Validity only (option A): counts + a fabricated flag, no per-sentence coverage (that needs a
+    fuzzy "is this a factual sentence" splitter -- deferred, D-020). Computed for every answer but
+    summarized over NON-REFUSAL answers (a refusal correctly carries no citation).
+    """
+    retrieved_ids = {normalize.normalize_for_match(h["doc_id"]) for h in retrieved}
+    cited = [name.strip()
+             for tag in _CITE_TAG.findall(answer)
+             for name in re.split(r"[,;]", tag) if name.strip()]
+    fabricated = [n for n in cited if normalize.normalize_for_match(n) not in retrieved_ids]
+    return {
+        "n_citations": len(cited),
+        "n_valid": len(cited) - len(fabricated),
+        "n_fabricated": len(fabricated),
+        "has_any_citation": bool(cited),
+        "has_fabricated": bool(fabricated),
+        "fabricated": sorted(set(fabricated)),  # the offending names, for eyeballing
+    }
+
+
 def main() -> None:
     rows = [json.loads(l) for l in QUESTIONS.read_text(encoding="utf-8").splitlines() if l.strip()]
     by_type: dict[str, int] = {}
@@ -146,6 +183,7 @@ def main() -> None:
             "grounded": None,
             "correct": None,
             "judge_reason": {"groundedness": None, "correctness": None},
+            "citations": None,  # [doc_id]-tag validity vs retrieved set (item 6, D-020); null offline
             "cost": None,  # per-stage tokens/latency/$ (item 4); null on offline runs
         }
 
@@ -176,6 +214,7 @@ def main() -> None:
                 correct=c["correct"],
                 judge_reason={"groundedness": g["reason"], "correctness": c["reason"]},
             )
+            rec["citations"] = parse_citations(answer, retrieved)  # deterministic [doc_id] check (D-020)
             stages = {"generation": gen_meta, "groundedness": g_meta, "correctness": c_meta}
             for m in stages.values():
                 m["cost_usd"] = cost.cost_usd(m)  # price the raw usage (item 4)
@@ -282,7 +321,7 @@ def summarize(rows: list[dict], results: list[dict], api: bool) -> dict:
 
     summary: dict = {"hit_rate": hit, "span_recall": span, "mrr": mrr,
                      "groundedness": None, "correctness": None, "abstention": None,
-                     "cost": None}
+                     "citations": None, "cost": None}
     if api:
         # OFFICIAL refusal label = deterministic refusal_exact (D-019); judge is_refusal is the
         # recorded cross-check. The label both scores abstention AND filters what gets grounded.
@@ -292,7 +331,17 @@ def summarize(rows: list[dict], results: list[dict], api: bool) -> dict:
             "primary_over_non_refusal": binom(lambda x: x["grounded"], non_refusal),
             "answerable_answered": binom(lambda x: x["grounded"], answered),
         }
-        summary["correctness"] = binom(lambda x: x["correct"], results)  # secondary; per-type = item 7
+        # Correctness (secondary), split by type (item 7). A blended number hides opposite
+        # failures -- strong single-hop can mask weak abstention (confidently answering questions
+        # it should refuse). answerable_overall vs abstention is the split the contamination story
+        # (D-013) + closed-book control (item 14) care about. Types derived from data so a future
+        # type (e.g. resolution, G-001) is included automatically.
+        correctness: dict = {}
+        for t in sorted({x["type"] for x in results}):
+            correctness[t] = binom(lambda x: x["correct"], [x for x in results if x["type"] == t])
+        correctness["answerable_overall"] = binom(lambda x: x["correct"], answerable)
+        correctness["overall"] = binom(lambda x: x["correct"], results)  # old blended number, kept
+        summary["correctness"] = correctness
         abst = [x for x in results if x["type"] == "abstention"]
         labeled = [x for x in results if x["refusal_exact"] is not None]  # both labels exist (api)
         divergent = [x for x in labeled if x["refusal_exact"] != x["is_refusal"]]
@@ -306,6 +355,15 @@ def summarize(rows: list[dict], results: list[dict], api: bool) -> dict:
                 "divergent_ids": [x["id"] for x in divergent],
             },
         }
+        # Citation validity (item 6, D-020), over NON-REFUSAL answers (a refusal has no citations).
+        cited_answers = [x for x in non_refusal if x["citations"] is not None]
+        if cited_answers:
+            summary["citations"] = {
+                "n_answers": len(cited_answers),
+                "fabricated_citation_rate": binom(lambda x: x["citations"]["has_fabricated"], cited_answers),
+                "zero_citation_rate": binom(lambda x: not x["citations"]["has_any_citation"], cited_answers),
+                "mean_citations_per_answer": macro(lambda x: x["citations"]["n_citations"], cited_answers),
+            }
         priced = [x["cost"] for x in results if x.get("cost")]  # per-stage tokens/$/latency (item 4)
         if priced:
             n = len(priced)
@@ -353,7 +411,9 @@ def report(run_id: str, out_dir: Path, summary: dict, api: bool) -> None:
     if api:
         g = summary["groundedness"]["primary_over_non_refusal"]
         print(f"groundedness (PRIMARY, non-refusal answers): {fmt(g)}")
-        print(f"correctness  (secondary): {fmt(summary['correctness'])}")
+        print("correctness (secondary, per type):")
+        for t, m in summary["correctness"].items():
+            print(f"  {t:<18}: {fmt(m)}")
         a = summary["abstention"]
         print(f"abstention-accuracy: {fmt(a['abstention_accuracy'])}  |  "
               f"false-refusal rate: {fmt(a['false_refusal_rate'])}")
@@ -363,6 +423,12 @@ def report(run_id: str, out_dir: Path, summary: dict, api: bool) -> None:
         if rl["divergent_ids"]:
             line += f" ids={rl['divergent_ids']}"
         print(line)
+        if summary.get("citations"):
+            ct = summary["citations"]
+            print(f"citations (over {ct['n_answers']} non-refusal answers): "
+                  f"fabricated-rate {fmt(ct['fabricated_citation_rate'])} | "
+                  f"zero-citation {fmt(ct['zero_citation_rate'])} | "
+                  f"mean {mf(ct['mean_citations_per_answer'])}/answer")
         if summary.get("cost"):
             cst = summary["cost"]
             by = cst["by_stage"]
