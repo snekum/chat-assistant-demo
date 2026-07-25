@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 import subprocess
 import sys
@@ -47,7 +48,9 @@ import store  # noqa: E402
 from retrieve import DEFAULT_K, Retriever  # noqa: E402
 from stats import wilson_interval  # noqa: E402
 
-QUESTIONS = Path("eval/questions.jsonl")
+# Override with EVAL_QUESTIONS=<path> to score a subset (e.g. a smoke-run slice) without
+# touching the gold file. config.question_set.{path,sha256} record whatever was actually used.
+QUESTIONS = Path(os.environ.get("EVAL_QUESTIONS", "eval/questions.jsonl"))
 RUNS_DIR = Path("runs")
 SEED = 42  # Default g; recorded, not load-bearing for this deterministic pipeline
 ANSWERABLE = {"single-hop", "multi-hop"}
@@ -111,21 +114,31 @@ def gold_rank(doc_id: str, full_ranking: list[dict]) -> int | None:
 
 
 def is_exact_refusal(answer: str) -> bool:
-    """Deterministic refusal detector (D-019, Tier-1 item 5): did the answer match the EXACT
-    refusal sentence the contract mandates (generate.REFUSAL_STRING)? This is now the OFFICIAL
+    """Deterministic refusal detector (D-019, Tier-1 item 5): does the answer BEGIN with the
+    exact refusal sentence the contract mandates (generate.REFUSAL_STRING)? This is the OFFICIAL
     refusal label -- it drives abstention scoring and filters the groundedness denominator; the
     judge's semantic is_refusal is kept only as a recorded cross-check (see summarize()).
 
-    Normalized EQUALITY under the D-011 normalizer (not containment): a substantive answer can't
-    normalize to EXACTLY the refusal sentence, so this can never wrongly pull a real answer out
-    of the groundedness denominator (the reputational-risk direction, D-009). An off-script
-    refusal (the bot's own words) reads False here and surfaces in the judge-divergence log --
-    which is the point: that log is how we learn, at smoke-run 1b, whether the bot obeys "reply
-    exactly" before we'd ever trust a smarter (judge) label instead.
-    # TUNABLE(equality not containment; revisit at 1b. Symptom wrong: divergence log fills with
-    #   genuine refusals that merely appended a citation/token -> loosen to normalized containment.)
+    PREFIX match under the D-011 normalizer -- loosened from strict equality at smoke-run 1b. The
+    run 20260725T142745Z (5 Qs) fired the pre-registered symptom: Haiku refuses ON-script but
+    APPENDS a helpful explanation ("I don't know based on the provided reports.\\n\\nThe report
+    does not contain..."), so strict equality missed 3/3 genuine refusals -- crashing
+    abstention_accuracy to 0.00 and leaking those refusals into the groundedness denominator.
+    All divergence was one-directional (judge=refusal, string=no-match = genuine off-script
+    refusal; zero judge misreads), which is exactly the "loosen the string" signal D-019 named.
+
+    Prefix keeps determinism AND nearly keeps equality's key guarantee: a substantive answer
+    almost never OPENS with the exact refusal sentence, so a real answer still can't be wrongly
+    pulled out of the groundedness denominator (the reputational-risk direction, D-009). The
+    trailing-space guard (nr + " ") keeps the match token-aligned (won't fire on a longer word
+    that merely starts with the sentence's last token).
+    # TUNABLE(prefix not equality; loosened at 1b on the append-explanation evidence above.
+    #   Symptom wrong: a substantive answer that OPENS with the refusal sentence then keeps
+    #   answering gets mislabeled a refusal -> tighten back toward equality or add a length cap.)
     """
-    return normalize.normalize_for_match(answer) == normalize.normalize_for_match(generate.REFUSAL_STRING)
+    na = normalize.normalize_for_match(answer)
+    nr = normalize.normalize_for_match(generate.REFUSAL_STRING)
+    return bool(nr) and (na == nr or na.startswith(nr + " "))
 
 
 _CITE_TAG = re.compile(r"\[([^\]]+)\]")  # any [....] bracket in the answer text
