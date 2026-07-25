@@ -220,6 +220,17 @@ architecture.
 - **1c Gold growth to ~45 (~4–5h):** build `eval/generate_questions.py` + review queue
   (~2h), supervise expansion (~2–3h). Hand-author only the new types: resolution 6–8,
   abstention sub-types, 2–3 clean comparisons.
+  - **STATUS (2026-07-25) — HALF DONE; do NOT read "gold grown to 47" as 1c complete.** The
+    LLM-assisted SINGLE-HOP half is done (pipeline built + pushed; single-hop 12→41). The
+    HAND-AUTHORED half is NOT started — current counts: multi-hop **2**, abstention **4**,
+    resolution **0**. Targets: this bullet says "2–3 clean comparisons"; Tier-3 item 12 says
+    ~10–12 multi-hop and ~12–14 abstention — the two numbers disagree, so the multi-hop/
+    abstention target is itself a sizing call (apply the D-012 n-logic when authoring, as with
+    single-hop n=45). Resolution (~6–8) pulls to Phase 3 (the clarify state doesn't exist yet).
+    This is the eval-ladder LEARNING (owner's own authoring, D-012), the main gold work before
+    the 1d baseline, and abstention needs an absence-proof per question (~20–30 min each).
+    Multi-hop will score ~0 until Phase-3 person-scoped retrieval — expected; it's the
+    before-picture.
 - **1d Baseline-of-record + closed-book control (~1–2h):** full pipeline on ~45 questions,
   clean tree, plus the `--no-context` contamination run.
 - **1e G-002 execution (~3–4h):** 24 blind labels + flip-rate; decide the trip rule as a
