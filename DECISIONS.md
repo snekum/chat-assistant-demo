@@ -147,6 +147,17 @@ protocol. Step-3 interrogation runs against these.
 - Guardrail: a citation only counts if the harness VERIFIES it (does the cited report
   actually contain the claim?). An unverified citation launders hallucinations — the
   opposite of the goal.
+- Deferred voice note (2026-07-25, surfaced at smoke-run 1b): the contract's USER-FACING voice
+  reveals the internal "reports" framing to end users — every answer opens "Based on the provided
+  reports, ..." and the refusal is "I don't know based on the provided reports." For a product
+  answering questions about real people, that leaks that a dossier is being consulted (owner's
+  concern). This is ONE coherent voice decision spanning ALL outputs (answers + citations +
+  refusals), NOT a refusal-string tweak. Deferred to Phase 3: the coordinator does the user-facing
+  synthesis (with attribution), so presentation voice lives there, while the RAG subagent's internal
+  "reports" framing stays LOAD-BEARING for the D-010 groundedness rubric ("supported by the provided
+  reports alone") and for the deterministic refusal detector (D-019). Rewording now would bump
+  f6-v1 → f6-v2 and reset baseline comparability for a voice we'll re-skin at the agent layer.
+  Trigger: Phase 3 coordinator/synthesis design.
 
 ## D-010: LLM-as-judge (F3)
 - Date: 2026-07-05
