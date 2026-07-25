@@ -72,3 +72,40 @@
 - Status: DEFERRED to 1b by design (no cutoff pre-committed before data, per D-013 posture). No
   work now; the divergence log + D-019 revisit-when already encode the gate. Cheap fixes (direction
   split; exclude/annotate divergent cases in the groundedness denominator) are 1b-sized.
+
+## G-004: Aggregate/set queries — declared in scope, zero eval coverage
+- Date: 2026-07-25
+- Component: retrieval + eval instrument; lands with Phase 3 routing
+- Gap: implicit-group queries ("Who can I talk to about expanding my business in China?") have NO
+  eval coverage anywhere, and nothing on the roadmap explicitly owned them until this row. The
+  ex-mh-1 removal drew the right line for the HIT@K GOLD SET — multi-hop must NAME its people so
+  exactly-N docs are provably the answer — but the side effect is that the aggregate class was
+  excluded entirely rather than measured differently. Owner has now declared aggregates IN SCOPE
+  (2026-07-25): "CEOs routinely ask these kinds of questions" — for this product (CEOs finding
+  CEOs for expansion/GTM/pivot outreach) the aggregate is arguably the PRIMARY query style.
+- Why the current instrument can't grade them: hit@k needs a COMPLETE answer key. With an
+  incomplete key, retrieval that correctly fetches a relevant doc missing from the key is scored a
+  MISS — the instrument punishes correct behavior (the ex-mh-1 failure: real group ~45 docs, key
+  listed 2). The gold-set rule STANDS (eval-goldset-review keeps rejecting aggregation questions
+  from the hit@k set); aggregates need a DIFFERENT instrument, not different questions in the same
+  one.
+- Candidate instruments (build-time decision, NOT made here):
+  1. Complete-key corpus sweep: for a handful of chosen aggregate questions, sweep all 268 docs
+     (grep + LLM pass for phrasings grep misses), hand-verify, declare the full relevant set →
+     exact recall measurable. The presence-proof mirror of the abstention absence-proof, similar
+     cost (~20–30 min/question). Feasible ONLY at 268 docs; decays at 10x — state this honestly.
+  2. Must-include partial key: 3–4 hand-verified certainly-relevant people; a recall floor that
+     never punishes correct extras, but blind to junk.
+  3. Judged per-retrieved-doc relevance: LLM judge scores each returned doc for relevance —
+     precision with zero authoring cost, but blind to misses and puts the judge inside a retrieval
+     metric (inherits the G-002 calibration burden).
+  A serious design composes 1-or-2 (the missed-people side) with 3 (the junk side).
+- System-side blocker, why this waits for Phase 3: retrieval fetches top-3; with ~9 truly relevant
+  people the system CANNOT answer an aggregate well regardless of what the eval says. Aggregates
+  likely need their own router lane (bigger k / filtered retrieval / different generation
+  contract). Eval design follows that behavior decision — same sequencing logic as G-001's
+  clarify state.
+- Status: OPEN, deliberately deferred. Trigger: Phase 3 requirements memo / routing design names
+  aggregates a lane → build the aggregate instrument alongside it. Related: negation-constrained
+  variants ("China experience but NOT manufacturing") share instrument 1's complete-key machinery
+  and are a known dense-retrieval weakness — evaluate together when this fires.

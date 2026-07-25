@@ -539,6 +539,14 @@ enumerate everything that could have moved." / "I clone your repo fresh — what
 - **LLM decomposer** ← deterministic name-spot fails on phrasings/nicknames.
 - **Hybrid BM25 + dense** ← ex-mh-1's unnamed-join class; rare-exact-token misses (company
   names, "GCC", tickers). The most likely trigger to actually fire.
+- **Aggregate/set-query eval + lane (G-004)** ← owner declared aggregates IN SCOPE (2026-07-25:
+  "CEOs routinely ask these") — "who can I talk to about expanding in China" is arguably the
+  product's primary query style, and the ex-mh-1 gold-set exclusion left it with zero coverage.
+  Gold-set rule stands; aggregates get their OWN instrument (complete-key corpus sweep — the
+  presence-proof mirror of absence-proofs, feasible at 268 — composed with judged per-doc
+  precision) and likely their own router lane (k=3 caps any aggregate at 3 people). Negation
+  variants ("China but NOT manufacturing") ride the same machinery. Trigger: Phase 3
+  requirements memo names aggregates a lane.
 - **Verification cascade (LLM entailment)** ← deterministic gate false-blocks paraphrases
   beyond threshold.
 - **Additional incident classes + second optimization** ← after the first drill is solid.
