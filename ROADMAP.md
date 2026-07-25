@@ -170,9 +170,12 @@ architecture.
     stratum the whole A/B is *about* currently has 2 questions), coverage including the 16
     `##`-variant docs and ≥2 §12-truncated docs, ~10–12 multi-hop clean 2-person comparisons
     (re-review ex-mh-1), ~12–14 abstention across sub-types (private-fact / off-domain
-    contamination-trap / empty-set / not-in-corpus person), 6–8 resolution questions, ~10
+    contamination-trap / empty-set / not-in-corpus person / **+2026-07-25 owner-approved:
+    superlative-computed [gold = refuse/caveat], advice-reframe [gold = redirect-to-people],
+    structural-absence [template-provable]** — see 1c STATUS), 6–8 resolution questions, ~10
     single-hop × 2 paraphrase variants (`paraphrase_of` field; is hit@1 a property of the
-    retriever or of the twelve sentences you happened to type?). Growth to ~75 is
+    retriever or of the twelve sentences you happened to type? — include VERBOSE real-shaped
+    phrasings: CEOs type three sentences of their own context first). Growth to ~75 is
     FUTURE-gated: only if A/B deltas land inside the CIs (F5's own revisit rule).
 13. **Auto-derived section/depth metadata** — the validator already locates every quote; make
     it emit section number + char-depth percentile per evidence item, plus a coverage matrix
@@ -231,6 +234,17 @@ architecture.
     the 1d baseline, and abstention needs an absence-proof per question (~20–30 min each).
     Multi-hop will score ~0 until Phase-3 person-scoped retrieval — expected; it's the
     before-picture.
+  - **Owner-approved new hand-authored strata (2026-07-25, from the CEO query-taxonomy review;
+    a few questions each, authored in this same session):** (i) **superlative/computed** ("who's
+    the youngest CEO here?") — gold behavior = refuse/caveat; the locally-grounded-globally-wrong
+    class where every per-claim support check passes and the answer is still false; (ii)
+    **advice-reframe** ("how should I approach pivoting to SaaS?") — gold = redirect to relevant
+    people, neither a consulting answer nor a bare refusal (the response-mode set grows toward
+    {answer, refuse, clarify, redirect}); (iii) **structural-absence** ("who can introduce me to
+    X?") — absence provable from the template itself (dossiers have no relationship section), the
+    cheapest abstention proof. Verbose real-shaped phrasings fold into the paraphrase-variant
+    stratum (item 12). Deliberately NOT adopted here: the Phase-5 held-back discovery set (see
+    Phase 5a) — kept unmeasured on purpose so the prod simulation can surface them genuinely.
 - **1d Baseline-of-record + closed-book control (~1–2h):** full pipeline on ~45 questions,
   clean tree, plus the `--no-context` contamination run.
 - **1e G-002 execution (~3–4h):** 24 blind labels + flip-rate; decide the trip rule as a
@@ -452,6 +466,16 @@ hallucinating in production, and how would you fix it":
 - **(a) Serving surface:** thin service (FastAPI-class) wrapping the coordinator + a traffic
   generator replaying gold/paraphrase/out-of-scope questions at modest QPS with **seeded
   anomaly windows** (you can't demonstrate detection without incidents to detect).
+  - **Held-back discovery set (deliberate, 2026-07-25):** the traffic mix INCLUDES query styles
+    from the CEO taxonomy that offline evals deliberately do NOT cover — sensitive/nosy queries
+    about the real subjects ("what's X's net worth / divorce?"), negation phrasings ("China but
+    NOT manufacturing"), freshness probes if Phase 3 left gaps, plus anything else unmeasured.
+    Held back so the simulation can surface the system's behavior GENUINELY (what it does with
+    these is truly unknown — no eval has ever scored them), producing the honest war-story loop:
+    traffic reveals behavior → trace diagnosis → postmortem → the eval gets baked in as the fix.
+    What's held back is the MEASUREMENT, not knowledge of the style — this note is the proof the
+    discovery was planned, which is the honest version of "saw it in prod." Do not quietly
+    pre-build evals for these before Phase 5.
 - **(b) Instrumentation:** per-stage/per-agent spans, tokens, cost — the same fields the run
   artifacts carry, now emitted live.
 - **(c) Online monitoring WITHOUT gold labels — the detector streams.** This framing is
