@@ -483,3 +483,40 @@ protocol. Step-3 interrogation runs against these.
   non-refusal — so if the bot hedges often, the judge measures the metric I care most about (did
   it correctly decline?) more faithfully than the string. The judge wins the moment the
   divergence log shows the bot won't obey the exact-string contract.
+
+## D-020: Citation instrument — validity-only vs coverage (Tier-1 item 6)
+- Date: 2026-07-24
+- Context: the generation contract (f6-v1) mandates a document-level [doc_id] tag after every
+  claim, but the harness never reads them — D-009's own "an unverified citation launders
+  hallucinations" is unenforced. doc_id == the person's full name, and the citation form is
+  [Full Name] (contract allows "report(s)" -> plural brackets), so a cited tag matches a
+  retrieved doc_id BY NAME with no resolution layer needed.
+- Options:
+  - A (validity + counts): deterministic parse — extract [..] tags, split plural brackets,
+    normalize, classify each as valid (name is in the RETRIEVED set for this question) or
+    fabricated (not). Record counts + has_fabricated + has_any_citation. No API. Catches the two
+    real failures: a fabricated citation (cited a doc it was never shown — the laundering signal,
+    and a contamination tell per D-013) and a zero-citation answer. Blind to graded per-sentence
+    coverage.
+  - B (A + coverage): also split the answer into sentences and score the fraction of FACTUAL
+    sentences carrying a tag. Adds a sentence-splitter TUNABLE and a fuzzy "what is a factual
+    sentence" denominator (a mini-judge problem — a naive splitter counts "Here's what I found:").
+  - C (B + support): judge that the cited doc actually CONTAINS the claim. Rejected — that is the
+    groundedness judge's job (D-010), duplicated per-citation and expensive.
+- Decision: A. A deterministic per-answer citation parser (`parse_citations`, sibling of
+  is_exact_refusal): a `citations` block per answer + a `citations` summary section
+  (fabricated_citation_rate, zero_citation_rate, mean citations/answer) measured over NON-REFUSAL
+  answers. Validity is checked against the RETRIEVED set for that question, not the whole corpus.
+- My reason: the simplest and most important thing is to make sure whatever the bot cites is
+  actually one of the reports it was handed — a made-up citation is the dangerous failure, and I
+  can catch it with plain name-matching, no AI, so it runs on every answer. Fuller
+  sentence-by-sentence coverage isn't worth the fuzzy machinery until something shows I need it.
+- Revisit when: (matching) a surname-only [Silva], an odd separator [X and Y], or a non-name
+  bracket gets mis-flagged fabricated -> extend the splitter/matcher. `# TUNABLE(full-name
+  normalized-exact match + comma/semicolon split for plural brackets; symptom above.)` (scope) ->
+  add B's per-sentence coverage when the Phase-4 gate needs "every claim traceable" OR runs show
+  grounded-but-uncited answers (valid citations but sparse).
+- Steelman (B, logged once): coverage is what makes citations USEFUL, not merely non-fabricated —
+  an answer that cites nothing scores zero-fabricated yet zero-traceable, and only graded coverage
+  catches a wall of grounded-but-uncited claims. If Phase-4's gate becomes "every claim
+  traceable," coverage is its real input and Phase-4 reopens this parser.
