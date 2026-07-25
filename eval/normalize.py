@@ -17,6 +17,14 @@ from __future__ import annotations
 
 import re
 
+# Snapshot this like the judge rubric / prompt contract (repro item 8). The path string in
+# config.json never changes when the LOGIC below does, so a normalizer edit would silently
+# re-score all hit-rate history with no config diff to show for it. Bump this BY HAND whenever
+# normalize_for_match changes; run.py records it, so a change is visible in a config diff.
+# TUNABLE(hand-bumped on any normalize_for_match change; symptom skipped: two runs disagree on
+#   hit@k with identical questions.sha256 + embedder + k -> a silent normalizer change is the suspect.)
+NORMALIZER_VERSION = "norm-v1"
+
 _CITE = re.compile(r"\[cite:[^\]]*\]")
 
 

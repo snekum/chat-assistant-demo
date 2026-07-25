@@ -520,3 +520,46 @@ protocol. Step-3 interrogation runs against these.
   an answer that cites nothing scores zero-fabricated yet zero-traceable, and only graded coverage
   catches a wall of grounded-but-uncited claims. If Phase-4's gate becomes "every claim
   traceable," coverage is its real input and Phase-4 reopens this parser.
+
+## D-021: Repro-hole closure (Tier-1 item 8; last instrument item before 1b)
+- Date: 2026-07-25
+- Context: runs are write-once and used as a comparison ledger, but four things a run's
+  reproducibility depends on were unpinned in config.json — a run could differ from another with
+  no config diff to explain it. Three are mechanical (no real alternative); the fourth (dirty-tree
+  handling) is the one genuine fork.
+- Mechanical closures (no D-fork; recorded for the audit trail):
+  - `question_set.sha256` — `n` is a WEAK fingerprint: a gold quote can be edited (changing which
+    gold is scored) without changing the row count, so two runs silently score different gold under
+    a same-looking config. Hash the raw bytes; any edit -> different hash -> visible in a diff.
+  - `normalizer.version` (`NORMALIZER_VERSION="norm-v1"` in normalize.py) — the config named the
+    normalizer as a PATH STRING that never changes when the function body does; changing the body
+    silently re-scores all hit-rate history (the module's own warning). Hand-bumped version,
+    snapshotted like RUBRIC_VERSION / PROMPT_CONTRACT_VERSION, makes the change a config diff.
+  - `embed_stack` (torch / sentence-transformers / numpy versions) — these determine the
+    EMBEDDINGS but are INVISIBLE to the cache key (model_id + role + sha256(text), the torch
+    caveat). Read via importlib.metadata (package metadata, NOT `import torch`) so a fully-cached
+    offline run still never loads torch (preserves the D-015 cache payoff). HONESTY LIMIT recorded
+    in-code: this is the version INSTALLED NOW; for a cache-HIT run it is not necessarily the
+    version that produced the cached vector. Recording makes a mismatch AUDITABLE; it does not FIX
+    the cache-key blindness (that fix = folding the stack version into the cache key, deferred —
+    no signature has fired).
+- The one fork — dirty-tree handling (config already records `git.dirty`):
+  - Options: (a) record-only (status quo — silent flag, no nudge); (b) WARN, don't block (loud
+    banner at launch, run proceeds); (c) ENFORCE (hard-block unless `--allow-dirty`).
+  - Decision: (b) warn, don't block. `warn_if_dirty()` prints a banner at launch; nothing is
+    blocked; `git.dirty` remains the permanent audit trail.
+- My reason: I do throwaway offline retrieval runs constantly and they vastly outnumber
+  baseline-of-record runs; a hard block would tax the tight synchronous feedback loop that is the
+  harness's whole point, and `--allow-dirty` would become reflex muscle-memory anyway — so enforce
+  pays friction daily and still erodes to a warning. The banner nudges at the one moment that
+  matters (cutting a baseline) while the recorded flag makes any dirty baseline auditable after.
+- Revisit when: a dirty-tree baseline-of-record slips through and pollutes a comparison despite the
+  banner -> promote to ENFORCE for comparison-grade runs (keep offline iteration unblocked, e.g.
+  gate only when the API lanes run). `# TUNABLE(warn-not-enforce; symptom: a dirty baseline gets
+  compared anyway.)`
+- Steelman (enforce, logged once): item 8's whole job is closing repro holes STRUCTURALLY so they
+  don't depend on human vigilance — that is exactly why sha256 / version constants beat "remember
+  to check." A warning is itself a vigilance-dependent guard, and an accidental baseline from a
+  dirty tree is precisely the "SHA pins nothing" hole the roadmap flagged about the original run.
+  Only enforce makes the guarantee structural rather than behavioral. It loses solely because the
+  block would fire on every throwaway offline run too, where the friction/erosion cost is real.
