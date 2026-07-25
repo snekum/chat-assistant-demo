@@ -23,11 +23,13 @@ Usage:  ./.venv/Scripts/python.exe eval/run.py
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import subprocess
 import sys
 from datetime import datetime, timezone
+from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 
 sys.path.insert(0, "src")
@@ -63,6 +65,35 @@ def git_info() -> dict:
     porcelain = _run(["status", "--porcelain"])
     dirty = bool(porcelain) if porcelain is not None else True
     return {"sha": sha, "dirty": dirty}
+
+
+def sha256_file(path: Path) -> str:
+    """Content fingerprint of the question set (repro item 8). `n` in the config is a weak
+    fingerprint -- a quote can be edited (changing which gold is scored) without changing the
+    row count, so two runs silently score different gold under a same-looking config. Hashing
+    the raw bytes pins the exact set: any edit -> different hash -> visible in a config diff."""
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def embed_stack_versions() -> dict:
+    """Versions of the packages that determine the EMBEDDINGS, snapshotted because they are
+    INVISIBLE to the cache key (model_id + role + sha256(text)) -- the torch caveat. A torch or
+    sentence-transformers upgrade can change what a cache-MISS produces while old cached vectors
+    persist, and nothing in the cache key would flag the mix. Recording the versions here makes
+    such a mismatch auditable across two runs (it does NOT fix the cache-key blindness).
+
+    Read via importlib.metadata (package METADATA, not the DLLs), NOT `import torch`, so a
+    fully-cached offline run still never loads torch -- preserving the D-015 cache payoff.
+    HONESTY CAVEAT: this is the version INSTALLED NOW. For a cache-HIT run it is not necessarily
+    the version that produced the cached vector (which was made whenever the cache was populated).
+    """
+    def _v(pkg: str) -> str | None:
+        try:
+            return version(pkg)
+        except PackageNotFoundError:
+            return None
+
+    return {pkg: _v(pkg) for pkg in ("torch", "sentence-transformers", "numpy")}
 
 
 def mean(xs: list) -> float | None:
@@ -133,7 +164,20 @@ def parse_citations(answer: str, retrieved: list[dict]) -> dict:
     }
 
 
+def warn_if_dirty() -> None:
+    """Repro item 8, dirty-tree rule: WARN, don't block (owner's call 2026-07-25). A hard block
+    would tax the constant throwaway offline runs that are the harness's tight-feedback point; the
+    loud warning is the nudge and config.git.dirty is the permanent audit trail. A comparison-grade
+    baseline-of-record must be cut from a clean tree -- this only reminds, it does not enforce."""
+    if git_info()["dirty"]:
+        print("!" * 72)
+        print("!! DIRTY TREE: uncommitted changes present. This run is NOT comparison-grade --")
+        print("!! the recorded SHA pins nothing. Commit before cutting a baseline-of-record.")
+        print("!" * 72)
+
+
 def main() -> None:
+    warn_if_dirty()
     rows = [json.loads(l) for l in QUESTIONS.read_text(encoding="utf-8").splitlines() if l.strip()]
     by_type: dict[str, int] = {}
     for r in rows:
@@ -252,9 +296,12 @@ def main() -> None:
         "retrieval": {"k": DEFAULT_K, "distance": "cosine",
                       "index": "pgvector-exact (D-014)"},
         "seed": SEED,
-        "normalizer": "eval/normalize.py:normalize_for_match (D-011)",
+        "normalizer": {"impl": "eval/normalize.py:normalize_for_match (D-011)",
+                       "version": normalize.NORMALIZER_VERSION},  # snapshot like the rubric (item 8)
+        "embed_stack": embed_stack_versions(),  # torch/st versions -- invisible to cache key (item 8)
         "ci_method": "wilson-score-95 (item 1; replaces Wald)",
-        "question_set": {"path": str(QUESTIONS), "n": len(rows), "by_type": by_type},
+        "question_set": {"path": str(QUESTIONS), "n": len(rows), "by_type": by_type,
+                         "sha256": sha256_file(QUESTIONS)},  # pins exact gold bytes (item 8)
         "stages": ["retrieval", "rank_diagnostics", "hit_rate", "span_recall"]
                   + (["generation", "judge"] if api else []),
         "artifacts": {"rankings": "rankings.jsonl -- full 268-row ranking/question (D-018 c)"},
