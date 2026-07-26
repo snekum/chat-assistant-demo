@@ -1,0 +1,35 @@
+{
+  "run_id": "20260726T114300Z-b7dc9ab-closedbook",
+  "control": "closed-book (D-013 item 14, Option A: contract + empty context)",
+  "closed_book_correctness": {
+    "multi-hop": {
+      "n": 6,
+      "successes": 0,
+      "rate": 0.0,
+      "ci_lo": 0.0,
+      "ci_hi": 0.3903430336530645
+    },
+    "single-hop": {
+      "n": 41,
+      "successes": 0,
+      "rate": 0.0,
+      "ci_lo": 6.938893903907228e-18,
+      "ci_hi": 0.08567044886890743
+    },
+    "answerable_overall": {
+      "n": 47,
+      "successes": 0,
+      "rate": 0.0,
+      "ci_lo": 0.0,
+      "ci_hi": 0.07556017119838872
+    }
+  },
+  "guardrail_hold_rate": {
+    "n": 47,
+    "successes": 47,
+    "rate": 1.0,
+    "ci_lo": 0.9244398288016114,
+    "ci_hi": 1.0
+  },
+  "note": "compare closed_book_correctness to the open-book baseline's correctness; open - closed = retrieval's lift. High closed-book => memory contamination (D-013)."
+}

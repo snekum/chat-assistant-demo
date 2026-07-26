@@ -359,7 +359,13 @@ protocol. Step-3 interrogation runs against these.
   D-013: single-hop correctness is correct-IFF-retrieved — HIT 29/29 = 1.00, MISS 0/12 = 0.00, ZERO
   correct-on-miss — so correctness is retrieval-driven, not memory. Closed-book is therefore now
   CONFIRMATORY (expected ~0); a non-zero result would contradict the baseline and flag a leak.
-  EXECUTION PENDING API credits (the $2.99 baseline spent the balance). Related 1d finding: the 30%
+  EXECUTED 2026-07-26 (run 20260726T114300Z-closedbook): closed-book correctness = 0.00 across all
+  types (single 0/41, multi 0/6, overall 0/47); guardrail-hold rate 1.00 [0.92, 1.00] — the bot
+  refused ALL 47 answerable questions with empty context, NEVER leaking memory even for recognizable
+  semi-public people. This CONFIRMS zero contamination TWO WAYS (open-book correct-iff-retrieved +
+  closed-book 0.00); open − closed = 0.71 = retrieval's FULL lift (100% of single-hop correctness is
+  retrieval, 0% memory). The D-013 names-only anonymizer trigger does NOT fire; it stays parked.
+  This CLOSES D-013 as a measurement for the current corpus/generator. Related 1d finding: the 30%
   "false-refusal" rate decomposes to 0 real generation false-refusals (gold retrieved but refused
   anyway) + 14 correct-given-miss (retrieval missed the gold) — the generator's abstention discipline
   is perfect; the 30% is just the retrieval miss-rate surfacing as refusals.
