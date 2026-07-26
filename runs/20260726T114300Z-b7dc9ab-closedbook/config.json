@@ -1,0 +1,24 @@
+{
+  "run_id": "20260726T114300Z-b7dc9ab-closedbook",
+  "created_utc": "2026-07-26T11:45:49.352221+00:00",
+  "git": {
+    "sha": "b7dc9ab",
+    "dirty": false
+  },
+  "control": "closed-book / no-context (D-013 item 14)",
+  "no_context": true,
+  "generator": {
+    "id": "claude-haiku-4-5",
+    "prompt_contract_version": "f6-v1"
+  },
+  "judge": {
+    "id": "claude-sonnet-5",
+    "rubric_version": "d010-v1"
+  },
+  "question_set": {
+    "path": "eval\\questions.jsonl",
+    "n_answerable": 47,
+    "sha256": "8076dd7a755ab1565da426cbba299501184e21a80db9d2c64f4ce1b1588893b3"
+  },
+  "scored": "correctness only (no context -> groundedness N/A)"
+}
