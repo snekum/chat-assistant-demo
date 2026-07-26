@@ -350,6 +350,19 @@ protocol. Step-3 interrogation runs against these.
   suspected of masking. The dangerous false green is correctness-high × hit-rate-LOW (green answer,
   retrieval absent). This is the architectural reason correctness stays SECONDARY + caveated, not a
   headline.
+- Closed-book control BUILT + Option A chosen (2026-07-26, item 14 = eval/closed_book.py). Option A =
+  keep the f6 guardrail contract (rule 1 "no prior knowledge, even if you recognize the person" +
+  rule 2 "refuse if absent") with EMPTY context → measures OPERATIONAL contamination (memory leaking
+  PAST the guardrail = the SAME decision the bot faces open-book on a retrieval miss). Rejected B
+  (drop the guardrail, "just answer") = raw memory CAPACITY, an upper bound that never occurs
+  operationally because the guardrail is always present. KEY 1d BASELINE FINDING that pre-answers
+  D-013: single-hop correctness is correct-IFF-retrieved — HIT 29/29 = 1.00, MISS 0/12 = 0.00, ZERO
+  correct-on-miss — so correctness is retrieval-driven, not memory. Closed-book is therefore now
+  CONFIRMATORY (expected ~0); a non-zero result would contradict the baseline and flag a leak.
+  EXECUTION PENDING API credits (the $2.99 baseline spent the balance). Related 1d finding: the 30%
+  "false-refusal" rate decomposes to 0 real generation false-refusals (gold retrieved but refused
+  anyway) + 14 correct-given-miss (retrieval missed the gold) — the generator's abstention discipline
+  is perfect; the 30% is just the retrieval miss-rate surfacing as refusals.
 
 ## D-014: Vector index / store layer (Default e — vetoed by exception)
 - Date: 2026-07-18
@@ -579,6 +592,14 @@ protocol. Step-3 interrogation runs against these.
   an answer that cites nothing scores zero-fabricated yet zero-traceable, and only graded coverage
   catches a wall of grounded-but-uncited claims. If Phase-4's gate becomes "every claim
   traceable," coverage is its real input and Phase-4 reopens this parser.
+- cite:-prefix fix (2026-07-26, surfaced at the 1d baseline). The generator sometimes copies the
+  corpus's own bracket forms — [cite: Ed Fahey], [Ed Fahey, Section 5] — instead of the contract's
+  [Ed Fahey], which the parser mis-flagged as FABRICATED (baseline fabricated-rate 0.061 = sh-008 +
+  mh-005, both citing VALID retrieved names). Fix in `_citation_names`: strip a leading "cite:"
+  prefix, drop bare-numeric ([cite: N]) and "Section N" brackets — all non-doc-citations; a REAL
+  fabrication (a name not in the retrieved set) still surfaces. Offline re-parse of the baseline:
+  0.061 → 0.000 (zero real fabrication). The baseline summary.json keeps 0.061 (write-once, D-021);
+  the corrected 0.000 is verified via re-parse and every future run uses the fixed parser.
 
 ## D-021: Repro-hole closure (Tier-1 item 8; last instrument item before 1b)
 - Date: 2026-07-25

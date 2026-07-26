@@ -142,6 +142,28 @@ def is_exact_refusal(answer: str) -> bool:
 
 
 _CITE_TAG = re.compile(r"\[([^\]]+)\]")  # any [....] bracket in the answer text
+_CITE_PREFIX = re.compile(r"^\s*cite\s*:\s*", re.I)  # corpus-style "cite:" the generator copies
+_SECTION_REF = re.compile(r"^section\s+\d+$", re.I)  # a within-doc pointer, not a report citation
+
+
+def _citation_names(answer: str) -> list[str]:
+    """Doc-citation candidates from the answer's [..] tags (D-020). The contract form is
+    [Full Name], but at the 1d baseline the generator also emitted corpus-style variants --
+    [cite: Ed Fahey], [cite: 1], [Ed Fahey, Section 5] -- so normalize before matching: strip a
+    leading 'cite:' prefix (baseline sh-008/mh-005 mis-flagged VALID names fabricated because
+    'cite' leaked into the normalized token), and drop non-doc brackets (bare numerics = corpus
+    [cite: N] markers; 'Section N' = a within-doc pointer). This lowers only FALSE fabrications;
+    a real fabricated citation (a name not in the retrieved set) still surfaces.
+    # TUNABLE(strip cite:-prefix + drop numeric/Section-N brackets; revisit if a NEW non-name
+    #   bracket form appears in a run, or a real doc named like one of these gets dropped.)
+    """
+    out: list[str] = []
+    for tag in _CITE_TAG.findall(answer):
+        for raw in re.split(r"[,;]", tag):
+            name = _CITE_PREFIX.sub("", raw).strip()
+            if name and not name.isdigit() and not _SECTION_REF.match(name):
+                out.append(name)
+    return out
 
 
 def parse_citations(answer: str, retrieved: list[dict]) -> dict:
@@ -154,18 +176,15 @@ def parse_citations(answer: str, retrieved: list[dict]) -> dict:
     not the provided reports -- D-013).
 
     Match = full-name normalized-exact (reuse the D-011 normalizer) against the retrieved doc_ids;
-    plural brackets are split on comma/semicolon because the contract sanctions "report(s)".
-    # TUNABLE(full-name match + comma/semicolon split; revisit when a surname-only [Silva], an odd
-    #   separator [X and Y], or a non-name bracket gets mis-flagged fabricated -> extend the matcher.)
+    plural brackets are split on comma/semicolon because the contract sanctions "report(s)". Tag
+    extraction + corpus-format normalization live in _citation_names (see its note for the 1d fix).
 
     Validity only (option A): counts + a fabricated flag, no per-sentence coverage (that needs a
     fuzzy "is this a factual sentence" splitter -- deferred, D-020). Computed for every answer but
     summarized over NON-REFUSAL answers (a refusal correctly carries no citation).
     """
     retrieved_ids = {normalize.normalize_for_match(h["doc_id"]) for h in retrieved}
-    cited = [name.strip()
-             for tag in _CITE_TAG.findall(answer)
-             for name in re.split(r"[,;]", tag) if name.strip()]
+    cited = _citation_names(answer)
     fabricated = [n for n in cited if normalize.normalize_for_match(n) not in retrieved_ids]
     return {
         "n_citations": len(cited),
