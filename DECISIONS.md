@@ -255,6 +255,31 @@ protocol. Step-3 interrogation runs against these.
     δ=0.30 paired; revisit when the measured A/B effect < 0.30 → recompute n from the
     observed p_flip, grow toward ~75. Symptom too-small: A/B discordant count < ~8/p_flip
     ⇒ McNemar can't reach significance.)`
+- Multi-hop sizing (2026-07-26; 2 → 6, authored mh-003..006). Multi-hop has a DIFFERENT sizing
+  logic than single-hop because it measures a DIFFERENT thing: the Phase-3 person-scoped-retrieval
+  before/after (not the Phase-2 chunking A/B, which is single-hop's job). Two facts set the size:
+  - NOT power-limited. The Phase-3 effect is huge and near-deterministic — before ≈ 0 (global top-3
+    rarely fetches BOTH named docs), after ≈ 1 (per-person retrieval fetches each directly). For a
+    PAIRED before/after where nearly every question flips miss→hit, one-way McNemar reaches p<0.05
+    at ~6 discordant pairs (0.5⁶·2 ≈ 0.03). So ~6 already proves Phase-3 worked; more buys almost
+    no statistical certainty.
+  - Coverage-limited, on TWO axes. What binds is representing failure modes, 2 each (n=1/mode can't
+    separate a real mode-effect from a fluke). Axis 1 = retrieval difficulty {different-domain,
+    same-domain, same-name}; the same-name tier tests the RESOLVER (G-001), not just retrieval.
+    Axis 2 = attribute/reasoning type — owner added NUMERIC (2026-07-26) as a mode that must be
+    chosen upfront (no run-trigger surfaces an unrepresented mode): {magnitude/units ($6B vs $21M),
+    year-inversion (older = earlier = smaller number)}. The 6 questions cover both axes via
+    double-duty (mh-003 = diff-domain × magnitude; mh-005 = same-domain × year-inversion), so
+    numeric costs no extra rows. The numeric split is diagnostic: if numeric correctness drops at
+    1d, the two questions say WHICH trap (units vs ordering).
+  - Grow trigger PRE-REGISTERED, per-tier and per-mode: add to a SPECIFIC tier/mode only if its
+    Phase-3 before/after is AMBIGUOUS (e.g. same-name flips 1-of-2, or numeric fails on one trap and
+    not the other). NOT "bands look wide" and NOT "cost is cheap so add more" (both are the
+    optional-stopping / padding anti-pattern the single-hop rule also forbids — restraint is the
+    deliverable). Held behind the trigger: aerospace, charter, GovTech, Notre Dame, Ross/Ross,
+    Grewal-Germany, Cho-biotech (all validated, all duplicates of an already-covered tier).
+    `# TUNABLE(6 = 2 per retrieval-tier + numeric via double-duty; grow a tier/mode only on
+    ambiguous Phase-3 before/after. Symptom too-small: a tier's flip rate is neither ~0 nor ~1.)`
 
 ## D-013: Real-entity contamination
 - Date: 2026-07-05
