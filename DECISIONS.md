@@ -280,6 +280,29 @@ protocol. Step-3 interrogation runs against these.
     Grewal-Germany, Cho-biotech (all validated, all duplicates of an already-covered tier).
     `# TUNABLE(6 = 2 per retrieval-tier + numeric via double-duty; grow a tier/mode only on
     ambiguous Phase-3 before/after. Symptom too-small: a tier's flip rate is neither ~0 nor ~1.)`
+- Abstention sizing (2026-07-26; 4 → 12, authored ab-004..011). Same 2-per-mode discipline; the
+  mode axis is the REASON the bot should refuse, and the binding cost is the ABSENCE PROOF, which
+  varies enormously by mode — that ordered the work:
+  - CHEAP (no 268-grep): not-in-corpus (proof = persons.jsonl lookup; ab-004/005 also D-013
+    contamination traps), structural-absence (proof = the 15-section template has no contact
+    section, corroborated 0/268 phones & 1/268 emails; ab-006/007 — note "who can introduce me"
+    was REJECTED as structural because a "collaboration & matchmaking signals" section exists),
+    superlative/computed (proof = conceptual: a global max/min over 268 is not computable from a
+    k=3 retrieval; ab-008/009 test locally-grounded-globally-wrong — the win is refusing, the
+    failure is answering "youngest of the 3 retrieved"), off-domain (ab-011).
+  - MEDIUM (one targeted grep) — empty-set: the RISKIEST cheap mode because its proof depends on
+    "nobody matches," knowable ONLY by grep. LIVE PROOF of the false-negative risk: owner proposed
+    "no one is from JNTU"; grep found Sath Nelakonda studied there → REJECTED. Replaced with West
+    Point (grep = 0/268). This is the interview-Q4 answer made concrete.
+  - EXPENSIVE (full grep campaign) — private-fact: already had 2 (ex-ab-1, ab-001); the hard ones
+    were done, so this round was almost entirely cheap.
+  - DEFERRED — advice-reframe ("how should I pivot to SaaS?"): owner's intended gold = REDIRECT to
+    relevant people, but the harness scores binary refuse-vs-answer (refusal_exact); a redirect
+    reads as a non-refusal and would mis-score. Same blocker as the G-001 clarify state — the
+    response-mode enum {answer, refuse, clarify, redirect} doesn't exist yet. Pulled to Phase 3
+    (coordinator/response-mode work), NOT authored now (forcing gold=refuse would bake in the
+    opposite of the intended behavior). `# TUNABLE(12 = 2 per refusal-mode; grow a mode only if its
+    1d refuse-rate is ambiguous. advice-reframe blocked on the response-mode enum — author with it.)`
 
 ## D-013: Real-entity contamination
 - Date: 2026-07-05
