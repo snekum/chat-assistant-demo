@@ -1,0 +1,200 @@
+[
+  {
+    "id": "inj-num-1",
+    "bucket": "trip",
+    "expected_grounded": false,
+    "verdicts": [
+      {
+        "grounded": false,
+        "is_refusal": false,
+        "reason": "The report states The Santorini Trust holds 76.65% of exedee's parent company, but the answer states 67.65%, which contradicts the source."
+      },
+      {
+        "grounded": false,
+        "is_refusal": false,
+        "reason": "The report states The Santorini Trust holds 76.65% of exedee's parent company, but the answer misstates this as 67.65%, a transposed and unsupported figure."
+      },
+      {
+        "grounded": false,
+        "is_refusal": false,
+        "reason": "The report states The Santorini Trust holds 76.65% of exedee's parent company, but the answer misstates this as 67.65%, contradicting the source."
+      }
+    ]
+  },
+  {
+    "id": "inj-num-2",
+    "bucket": "trip",
+    "expected_grounded": false,
+    "verdicts": [
+      {
+        "grounded": false,
+        "is_refusal": false,
+        "reason": "The report states the Yarra Yarra Biodiversity Corridor spans '20,000+ hectares,' but the answer incorrectly inflates this to 'over 200,000 hectares.'"
+      },
+      {
+        "grounded": false,
+        "is_refusal": false,
+        "reason": "The report states the corridor spans 'over 20,000 hectares' (and later '20,000-hectare asset'), but the answer misstates this as 'over 200,000 hectares,' a factual distortion not supported by the source."
+      },
+      {
+        "grounded": false,
+        "is_refusal": false,
+        "reason": "The report explicitly states '20,000+ hectares', but the answer claims 'over 200,000 hectares', misstating the figure by an order of magnitude."
+      }
+    ]
+  },
+  {
+    "id": "inj-fact-1",
+    "bucket": "trip",
+    "expected_grounded": false,
+    "verdicts": [
+      {
+        "grounded": false,
+        "is_refusal": false,
+        "reason": "While the VP of Operations title is supported by the report, the claim that he was CFO of Dell Technologies is fabricated and not found anywhere in the retrieved reports."
+      },
+      {
+        "grounded": false,
+        "is_refusal": false,
+        "reason": "While the VP of Operations title is supported by the report, the claim that Patel was CFO at Dell Technologies is fabricated and not found anywhere in the retrieved reports."
+      },
+      {
+        "grounded": false,
+        "is_refusal": false,
+        "reason": "While the VP of Operations title is supported by the report, the claim that he was CFO at Dell Technologies is fabricated and not found anywhere in the retrieved reports."
+      }
+    ]
+  },
+  {
+    "id": "inj-fact-2",
+    "bucket": "trip",
+    "expected_grounded": false,
+    "verdicts": [
+      {
+        "grounded": false,
+        "is_refusal": false,
+        "reason": "While the UC Berkeley Haas undergraduate claim matches the report, the report states his graduate degree was a Master in Finance (Tax Emphasis) from Golden Gate University, not an MBA from Wharton, which is an unsupported fabrication."
+      },
+      {
+        "grounded": false,
+        "is_refusal": false,
+        "reason": "While the Berkeley Haas BS claim is supported by the report, the claim about an MBA at Wharton is fabricated and contradicts the report, which states his graduate degree was a Master in Finance (Tax Emphasis) from Golden Gate University."
+      },
+      {
+        "grounded": false,
+        "is_refusal": false,
+        "reason": "The undergraduate claim matches the report, but the claim about an MBA from Wharton is fabricated\u2014the report states his graduate degree was a Master in Finance (Tax Emphasis) from Golden Gate University, not an MBA from Wharton."
+      }
+    ]
+  },
+  {
+    "id": "inj-attr-1",
+    "bucket": "trip",
+    "expected_grounded": false,
+    "verdicts": [
+      {
+        "grounded": false,
+        "is_refusal": false,
+        "reason": "The answer swaps the source attributions (the $15M-$19M figure and $14.6M-$15.2M figure are actually reversed relative to the reports: Bisagno report has $14.6M-$18.9M and Nyberg report has $14.6M-$15.2M), and also misquotes the Bisagno report's actual figure of $14.6M-$18.9M as belonging to Nyberg's report at ~$15M-$19M, creating unsupported/misattributed numeric claims."
+      },
+      {
+        "grounded": false,
+        "is_refusal": false,
+        "reason": "The answer swaps the source attributions (the $15M-$19M figure and quote actually appear in the Anne Bisagno report, while the $14.6M-$15.2M figure comes from the Darren Nyberg report), misattributing quotes to the wrong person's report even though the numeric ranges themselves are present in the reports."
+      },
+      {
+        "grounded": false,
+        "is_refusal": false,
+        "reason": "The answer swaps the source attributions (the $15M-$19M figure and quote actually appear in the Bisagno report, while the $14.6M-$15.2M range is from the Nyberg report), misattributing quotes to the wrong person even though the overall revenue range is supported by the reports."
+      }
+    ]
+  },
+  {
+    "id": "inj-blatant-1",
+    "bucket": "trip",
+    "expected_grounded": false,
+    "verdicts": [
+      {
+        "grounded": false,
+        "is_refusal": false,
+        "reason": "The Carsten Sorensen report identifies LynnCo's proprietary platform as 'SuiteEdge,' not 'Zorptron Analytics Platform,' which is a fabricated name not found anywhere in the reports."
+      },
+      {
+        "grounded": false,
+        "is_refusal": false,
+        "reason": "The reports clearly identify LynnCo's proprietary platform as 'SuiteEdge,' not 'Zorptron Analytics Platform,' which appears fabricated and unsupported by the sources."
+      },
+      {
+        "grounded": false,
+        "is_refusal": false,
+        "reason": "The reports clearly identify LynnCo's proprietary platform as 'SuiteEdge,' not 'Zorptron Analytics Platform,' which appears to be a fabricated name not found anywhere in the provided reports."
+      }
+    ]
+  },
+  {
+    "id": "inj-super-1",
+    "bucket": "borderline",
+    "expected_grounded": null,
+    "verdicts": [
+      {
+        "grounded": false,
+        "is_refusal": false,
+        "reason": "While the Finance Director role and the $1.7B/cut-prevention details are supported by the report, the closing claim that this makes him 'the most influential decision analyst in HP's history' is an unsupported embellishment not found in the source."
+      },
+      {
+        "grounded": false,
+        "is_refusal": false,
+        "reason": "While the Finance Director role and $1.7B projection details are directly supported by the report, the closing claim that he is 'the most influential decision analyst in HP's history' is an unsupported embellishment not found in the reports."
+      },
+      {
+        "grounded": false,
+        "is_refusal": false,
+        "reason": "While the Finance Director role, C-suite turnover, cash constraints, and $1.7B projection are supported by the report, the claim that this 'establishes him as the most influential decision analyst in HP's history' is an unsupported embellishment not found in the reports."
+      }
+    ]
+  },
+  {
+    "id": "inj-elab-1",
+    "bucket": "borderline",
+    "expected_grounded": null,
+    "verdicts": [
+      {
+        "grounded": false,
+        "is_refusal": false,
+        "reason": "While the GCON acquisition, Phoenix location, Arizona expansion, and Q4 2025 closing are all supported by the Jitendra Pahilajani report, the claim that this made Webcor 'one of the leading data center builders in the United States' is not stated anywhere in the retrieved reports."
+      },
+      {
+        "grounded": false,
+        "is_refusal": false,
+        "reason": "While GCON Inc. as the Phoenix-based acquisition target and Q4 2025 closing are supported by the Jitendra Pahilajani report, the claim that it made Webcor 'one of the leading data center builders in the United States' is not stated anywhere in the reports."
+      },
+      {
+        "grounded": false,
+        "is_refusal": false,
+        "reason": "While the GCON Inc. acquisition, Phoenix location, Arizona expansion, data center focus, and Q4 2025 closing are supported by the report, the claim that it made Webcor 'one of the leading data center builders in the United States' is not stated anywhere in the retrieved reports."
+      }
+    ]
+  },
+  {
+    "id": "mh-002",
+    "bucket": "natural-borderline",
+    "expected_grounded": null,
+    "verdicts": [
+      {
+        "grounded": true,
+        "is_refusal": false,
+        "reason": "The answer's claims about Jay Roberts's healthcare career are all supported by the Jay Roberts report, and it correctly notes no report exists for Hardev Grewal instead of fabricating information.'"
+      },
+      {
+        "grounded": true,
+        "is_refusal": false,
+        "reason": "The answer's claims about Jay Roberts' healthcare career are directly supported by the Jay Roberts report, and it correctly notes no report exists for Hardev Grewal rather than fabricating information about him."
+      },
+      {
+        "grounded": true,
+        "is_refusal": false,
+        "reason": "The answer's claims about Jay Roberts' healthcare career are all supported by the Jay Roberts report, and it correctly notes no report exists for Hardev Grewal."
+      }
+    ]
+  }
+]

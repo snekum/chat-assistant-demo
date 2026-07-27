@@ -36,8 +36,16 @@
   to the judge's verdict; report simple agreement now (Cohen's kappa once N is bigger); set the
   alarm threshold as a TUNABLE with a stated symptom; on trip, cut a NEW rubric version and
   re-score ALL runs under it (never mix versions, per D-010) rather than patching in place.
-- Status: OPEN. Tied to D-010; resolve before judge numbers are trusted as config COMPARISONS
-  (they're fine as directional signals now).
+- Status: RESOLVED 2026-07-27 (Phase 1e; D-022 + calibration/20260726T091259Z-2158c98/report.json).
+  All three unknowns are now answered and EXECUTED: (1) which verdicts → hybrid stratified design
+  (natural real verdicts for the false-alarm direction + 8 injected adversarial plants for the
+  dangerous direction the 33/0-skewed run can't produce); (2) trip threshold → asymmetric
+  zero-tolerance (one judge-passed plant trips), natural set report-only; (3) on-trip response →
+  bump RUBRIC_VERSION + re-score all runs (D-010). Result at d010-v1: no trip (6/6 plants caught),
+  100% natural agreement, both gray-zone plants owner==judge==ungrounded, flip-rate 0%. kappa still
+  DEFERRED until ≥50 cumulative labels (degenerate at n=33 all-true). The protocol is now a
+  re-runnable instrument (eval/calibrate.py) armed for every future rubric bump — so judge numbers
+  are trustworthy as config COMPARISONS at d010-v1, not just directional.
 
 ## G-003: D-019 refusal instrument — three items deferred to smoke-run 1b
 - Date: 2026-07-24

@@ -669,3 +669,115 @@ protocol. Step-3 interrogation runs against these.
   dirty tree is precisely the "SHA pins nothing" hole the roadmap flagged about the original run.
   Only enforce makes the guarantee structural rather than behavioral. It loses solely because the
   block would fire on every throwaway offline run too, where the friction/erosion cost is real.
+
+## D-022: Judge calibration design (G-002 close; Phase 1e, Tier-2 items 9+10)
+- Date: 2026-07-27
+- Context: G-002 (GAPS) is the open "the ruler is uncalibrated" gap. Item 9 = human-vs-judge
+  agreement + a trip rule; item 10 = judge flip-rate (Sonnet-5 rejects temperature, so stability
+  must be MEASURED not asserted — D-010 temp-0 amendment). The BINDING data fact discovered at
+  design time: the 1d baseline (20260726T091259Z-2158c98) groundedness pool is **33 non-refusal
+  answers, ALL grounded=true, ZERO grounded=false**. The bot refuses instead of hallucinating
+  (the correct-iff-retrieved + closed-book=0.00 discipline from D-013), so the run STRUCTURALLY
+  cannot produce an ungrounded answer. The roadmap's pre-registered 8-grounded-true / 8-grounded-
+  false stratification is therefore IMPOSSIBLE from real data, and raw agreement on the natural
+  set is ~100% by construction (Cohen's kappa undefined — no variance in the human labels).
+- Three sub-decisions:
+  1. SAMPLE DESIGN (fork: natural-only / injected-only / hybrid). Decision: HYBRID. Label a
+     natural slice of the real run (the correctness lane HAS negatives — 14 false-refusals + the
+     one fluent-but-wrong mh-002 — plus a sample of grounded-true for the false-alarm direction),
+     AND author ~8 injected adversarial ungrounded answers (real question + real retrieved context
+     with a PLANTED unsupported claim) to stress-test the direction the run can't produce. The two
+     are reported as SEPARATE measurements, never pooled into one agreement number. Budget still
+     ~24 labels total (≈16 natural + ≈8 injected), redistributing the roadmap's 8/8/4/4 given the
+     skew: the 8 "grounded-false" become the injected set.
+  2. TRIP SEMANTICS (fork: fixed-% / kappa / asymmetric). Decision: ASYMMETRIC. On the injected
+     groundedness set, ZERO TOLERANCE — the judge passing even ONE injected-ungrounded answer as
+     grounded trips the alarm (→ bump RUBRIC_VERSION, re-score ALL runs, never mix, per D-010).
+     On the natural set, report-only disagreement, NO gate (a judge that wrongly FAILS a grounded
+     answer only makes the bot look worse than it is — the safe/pessimistic direction). Cohen's
+     kappa DEFERRED until ≥50 cumulative mixed labels exist (degenerate at n=33 all-true).
+  3. FLIP-RATE (item 10; mechanical, no real fork). Judge each item 3×; flip-rate = fraction
+     non-unanimous; if > ~5–10% switch official runs to majority-of-3. MEASURED ON the injected +
+     borderline items (multi-hop / mh-002), NOT the slam-dunk grounded-true answers — an obviously
+     grounded answer never makes the judge wobble, so measuring flips there gives a falsely
+     reassuring 0%.
+- My reason (owner):
+  - Sample: we should test the false refusals (that's the correctness lane) and — more importantly
+    — the ungrounded case, but every answer is currently grounded, so we inject false facts and see
+    whether the judge marks them ungrounded. (Not a parrot of the tradeoff text: owner re-derived
+    the hybrid unprompted from "we have no wrong answers to stress-test on.")
+  - Trip: zero tolerance on an ungrounded answer being judged grounded, because a CEO getting wrong
+    info about another CEO is the failure we least tolerate and the whole reason for the check. The
+    judge wrongly failing a grounded answer is annoying but safe; wrong refusals matter too but that
+    is the APP's behavior (a retrieval track, Phase 2/3), NOT the ruler — 1e can't fix it and the
+    false_refusal_rate is measured deterministically, judge-independent.
+  - Flip: we can't control temperature, so run it a few times and check it behaves the same; if it
+    drifts, take best-of-3 — and run it on the hard cases (injected/almost-right), because the
+    obviously-correct ones the judge will always get right and won't wobble on.
+- Revisit when: (trip) an injected-ungrounded answer is judged grounded → the ruler is unreliable
+  in the dangerous direction; bump the rubric and re-score. (kappa) ≥50 cumulative mixed labels
+  accumulate → switch the natural-set stat from raw agreement to kappa. (flip) flip-rate > ~5–10%
+  → majority-of-3 becomes the official aggregation for comparison runs.
+- TUNABLEs (values proposed at design; symptoms recorded):
+  `# TUNABLE(~8 injected = 2 each across {off-by-a-number, unsupported-inference, wrong-attribution,
+  outside-knowledge} + 1 blatant-fabrication control; grow a KIND only if the judge misses it or a
+  suspected kind is untested. Symptom too-small: judge catches all 8 yet you distrust an unrepresented
+  failure shape.)`
+  `# TUNABLE(flip: 3 runs, majority-of-3 above ~5–10% non-unanimous; symptom wrong: A/B groundedness
+  deltas you act on are SMALLER than the measured flip-rate ⇒ the ruler's wobble dominates the signal.)`
+- Injection taxonomy grounded in REAL generator behavior (2026-07-27, owner drilled "do these lie-types
+  even happen?"). Read all 33 non-refusal answers from the 1d baseline before authoring. Findings that
+  RESHAPED the set: (a) the generator is fact-dense and number-heavy ("76.65%", "$1.7B", "20,000 hectares")
+  → off-by-a-number is the MOST realistic plant, promoted to primary + unambiguous trip item; (b) it does
+  NOT manufacture superlatives — the only superlatives in all 33 are ones it RELAYS in quotes from the
+  report (sh-013 "world's largest LED supplier"; sh-022 "Australia's largest carbon sink"), so the
+  "unsupported inference / most experienced" plant owner was skeptical of is NOT something this generator
+  does → DEMOTED from a trip item to a borderline (gray-zone, report-only) item. Owner's skepticism was
+  correct and improved the design. (c) realistic drift homes = multi-doc answers (sh-001 blends two
+  people's revenue ranges → wrong-attribution plant) and the occasional added context sentence (sh-024
+  "staple in the BMW track community" → elaboration-drift plant). The gray-zone items never trip because
+  you cannot zero-tolerance-fail the judge on a case where careful humans themselves disagree.
+- EXECUTED 2026-07-27 (calibration/20260726T091259Z-2158c98/report.json). Judge d010-v1 PASSES; the
+  alarm did NOT trip. Results:
+  - Trip test: judge marked all 6 confirmed-ungrounded plants (off-by-a-number x2, outside-knowledge
+    x2, wrong-attribution, blatant) grounded=false → 0 misses → no trip. The ruler catches the
+    dangerous direction the run itself never produced.
+  - Natural false-alarm: 8/8 (100%) human/judge agreement — the judge never wrongly failed a
+    genuinely-grounded answer, including the two relayed-superlative cases (sh-013/sh-024) it correctly
+    kept grounded. So it is strict without being trigger-happy.
+  - Gray zone (the interesting finding, STANDS): on BOTH borderline plants the owner INDEPENDENTLY
+    labeled ungrounded — the SAME as the judge. Owner and judge share the strict "supported by the
+    reports ALONE" bar; the predicted disagreement did not appear. NEAR-MISS on protocol: the assistant
+    verbally leaked the judge's aggregate outcome (both gray-zone judged ungrounded + set composition)
+    AFTER `judge-injected` but the owner confirms they had already finished labeling and only saw the
+    message on scroll-back afterward — so the labels were genuinely blind and the result holds. HONEST
+    CAVEAT (unchanged): n=1 labeler, so this shows owner and THIS judge share the line, not that the
+    line is objectively right. The class stays gray in principle; report-only, never trips.
+  - BLIND-PROTOCOL fix (from the near-miss, encoded in eval/calibrate.py): label FIRST; `judge-injected`
+    now prints no verdicts/ids/kinds (only a progress counter); nobody narrates the judge's outcome or
+    the set composition before labeling. The leak was verbal, not in the artifacts — but had the owner
+    scrolled up mid-label it would have anchored them, so the rule + silenced tool prevent recurrence on
+    the next rubric bump.
+  - Flip-rate: 0% non-unanimous over 9 hard items x 3 runs → single-call judge is stable enough; NO
+    majority-of-3 needed at d010-v1 (item 10 closed; re-measure on any rubric bump). MEASURED
+    replacement for the unsettable temp-0 (D-010 amendment).
+  - Correctness lane (labeled 2026-07-27): 7/8 (88%) human/judge agreement. The SOLE disagreement is
+    mh-002 (owner=correct, judge=incorrect) — the genuinely ambiguous multi-hop case: the bot named the
+    right person (Jay Roberts = healthcare) but ONLY because retrieval fetched Jay and missed Hardev
+    Grewal, so it never actually performed the comparison (it abstained on Hardev). Outcome-correct vs
+    process-correct. This is the textbook reason correctness is SECONDARY: the REAL failure is a
+    retrieval miss, already caught load-bearingly by hit@1=false / span-recall@3=0.5, while grounded=true
+    is also right (the bot didn't lie, it was honest about the missing report). The disagreement is KEPT
+    (not flipped to force 8/8) as the more honest artifact; it is report-only, no action. That the lone
+    split lands on the one ambiguous item is itself a calibration positive — the judge doesn't diverge on
+    clear cases.
+  Net: G-002 RESOLVED for rubric d010-v1 — the primary-metric ruler is calibrated in both directions
+  and stable; the asymmetric trip rule is now armed for every future RUBRIC_VERSION bump.
+- Steelman (natural-only, the option passed on, logged once): an injected bad answer is BLATANT and
+  real drift is SUBTLE — if the judge catches an obvious plant that proves nothing about whether it
+  catches the plausible-number-slightly-off that actually happens in the wild, so injection can buy
+  FALSE confidence, and the natural 33 (judge didn't false-alarm on genuinely-grounded answers) is a
+  real result in the direction the data actually went. This loses only because a guardrail never
+  tested in the failure direction can't be claimed to work at all (the dead-battery smoke detector);
+  the steelman survives as a DESIGN CONSTRAINT — the plants must be realistic (subtle number/inference/
+  attribution errors), not cartoonish, or the stress-test is theater.

@@ -1,0 +1,49 @@
+{
+  "run_id": "20260726T091259Z-2158c98",
+  "trip_rule": "asymmetric zero-tolerance on injected trip-bucket (D-022)",
+  "ALARM_TRIPPED": false,
+  "natural_groundedness": {
+    "n": 8,
+    "agreement": 1.0,
+    "false_alarms_judge_said_grounded_human_ungrounded": [],
+    "note": "report-only; false-alarm direction is safe (bot looks worse, not wrong)"
+  },
+  "injected_trip": {
+    "n_trip": 6,
+    "judge_missed_a_planted_lie": [],
+    "plants_human_did_not_confirm_ungrounded": []
+  },
+  "injected_borderline": [
+    {
+      "id": "inj-super-1",
+      "kind": "manufactured-superlative",
+      "human": "ungrounded",
+      "judge_grounded": false
+    },
+    {
+      "id": "inj-elab-1",
+      "kind": "elaboration-drift",
+      "human": "ungrounded",
+      "judge_grounded": false
+    }
+  ],
+  "correctness": {
+    "n": 8,
+    "agreement": 0.875,
+    "disagreements": [
+      {
+        "id": "mh-002",
+        "human": "correct",
+        "judge_correct": false
+      }
+    ]
+  },
+  "flip_rate": {
+    "n_items": 9,
+    "runs_each": 3,
+    "rate": 0.0,
+    "non_unanimous": [],
+    "alarm_threshold": 0.1,
+    "use_majority_of_n": false
+  }
+}

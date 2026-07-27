@@ -1,0 +1,17 @@
+item,your_verdict,# fill with: grounded | ungrounded
+G01,,ungrounded
+G02,,grounded
+G03,,grounded
+G04,,grounded
+G05,,grounded
+G06,,grounded
+G07,,grounded
+G08,,ungrounded
+G09,,ungrounded
+G10,,grounded
+G11,,ungrounded
+G12,,ungrounded
+G13,,grounded
+G14,,ungrounded
+G15,,ungrounded
+G16,,ungrounded
