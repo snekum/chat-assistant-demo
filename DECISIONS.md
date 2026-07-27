@@ -369,6 +369,26 @@ protocol. Step-3 interrogation runs against these.
   "false-refusal" rate decomposes to 0 real generation false-refusals (gold retrieved but refused
   anyway) + 14 correct-given-miss (retrieval missed the gold) — the generator's abstention discipline
   is perfect; the 30% is just the retrieval miss-rate surfacing as refusals.
+- What anonymization is FOR — the conceptual clarification (2026-07-26, owner drilled this). Anonymizing
+  the corpus is a MEASUREMENT instrument, NOT a production defense; conflating the two is the common
+  error. Two distinct questions need two different tools:
+  - Q1 (measurement): "does the RAG actually work, or is the model's memory masking a broken pipeline?"
+    ANONYMIZATION answers this — fake names the model can't know from pretraining make any correctness
+    provably retrieval-driven. Eval-set only; never touches production.
+  - Q2 (production): "when a real user asks about the real Aaron Silva, does the answer come from the
+    report or from stale pretraining memory?" GROUNDING ENFORCEMENT answers this — contract rule 1
+    ("no prior knowledge, even if you recognize the person") + groundedness judge + refuse-if-absent.
+    It works identically on real and fake names, so it IS the production defense; anonymization is not.
+  Owner's "isn't anonymizing just delayed contamination?" is correct IF anonymization were the
+  production defense — it isn't, so there's no delay: grounding handles production, name-agnostic.
+  The KICKER (why this closes cleanly): the closed-book control is a SECOND, dominant way to answer Q1
+  — anonymization removes the model's MEMORY (fake names); closed-book removes the CONTEXT and checks
+  if correctness survives. It came back 0.00 on the REAL names, so (a) the real-name eval is already
+  memory-clean → anonymization buys nothing for measurement, and (b) it demonstrates Q2 directly (the
+  model refused all 47 real-person questions with no context → grounding holds on people it recognizes).
+  Anonymization would only have earned its cost IF closed-book were HIGH (real-name eval memory-inflated
+  → need a clean test set to trust scores) — and even then it fixes only Q1, never Q2. Closed-book = 0,
+  so the trigger doesn't fire and the anonymizer stays parked.
 
 ## D-014: Vector index / store layer (Default e — vetoed by exception)
 - Date: 2026-07-18

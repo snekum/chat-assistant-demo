@@ -80,6 +80,8 @@ Filling this in *is* the studying; the filled-in version *is* your pre-interview
 - What's the exact cell (which metrics high, which low) that is the contamination signature in the
   wild, and why can neither groundedness nor hit-rate establish "retrieval was load-bearing"? — ______  `(check: D-013)`
 - The **closed-book control** — what does open−closed correctness measure? — ______  `(check: D-013, ROADMAP item 14)`
+- Why does **anonymizing the corpus NOT fix production contamination** — and what does? *(follow-up:
+  Q1-measurement vs Q2-production; why did closed-book make anonymization unnecessary even for Q1?)* — ______  `(check: D-013 "what anonymization is FOR")`
 
 ## 7. Statistics & sizing (where most candidates die)
 - **Wilson vs Wald** intervals — what artifact did Wald produce at p∈{0,1}? — ______  `(check: ROADMAP Tier-1 item 1)`
