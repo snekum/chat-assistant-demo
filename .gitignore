@@ -54,6 +54,3 @@ scripts/pseudonymize.py
 # --- Judge-calibration artifacts: embed verbatim report text + real names. Keep private. ---
 calibration/
 eval/calibration_injected.jsonl
-
-# --- Internal workflow skill: references the private planning docs. Keep private. ---
-.claude/skills/phase-close/
