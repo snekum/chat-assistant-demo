@@ -12,7 +12,7 @@ import store  # noqa: E402
 from embedder import NomicLocal  # noqa: E402
 
 # Whole-doc baseline: 3 docs ~= 8.5k tok context, fits any generator.
-# TUNABLE(3, revisit when multi-hop needs facts from >3 subjects) -- FORKS.md Default f
+# TUNABLE(3, revisit when multi-hop needs facts from >3 subjects)
 DEFAULT_K = 3
 
 

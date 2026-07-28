@@ -9,7 +9,7 @@ Layers, kept distinct on purpose:
     vector space => full re-embed, per the D-008 guardrail). Do not conflate the two.
 
 Resolved backend: nomic-embed-text-v1.5, dim=768, window=8192, cosine over L2-normalized
-vectors (FORKS.md Default d). Voyage-3 remains a real, unused fallback (D-008) -- stubbed
+vectors. Voyage-3 remains a real, unused fallback (D-008) -- stubbed
 so the interface is honest without building the path we didn't take.
 """
 from __future__ import annotations
