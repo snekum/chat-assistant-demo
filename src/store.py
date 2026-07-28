@@ -3,7 +3,7 @@
 2-table schema (D-016): persons = resolution/entity anchor; chunks = retrieval unit that
 carries the embedding. No ANN index yet -- exact seqscan is correct and sub-ms at this
 scale (D-014); HNSW is deferred to the scale trigger. Distance = cosine (<=>) over
-L2-normalized vectors (FORKS.md Default d), so score = 1 - cosine_distance.
+L2-normalized vectors, so score = 1 - cosine_distance.
 """
 from __future__ import annotations
 

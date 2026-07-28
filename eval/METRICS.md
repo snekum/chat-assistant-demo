@@ -1,7 +1,8 @@
 # Eval metrics reference — hit@k and comparing configs
 
-Learning note for the eval harness (Component 2). Complements FORKS.md Default m
-("report hit@1 and hit@3 separately, per question type") and F5 (CIs / question-set size).
+Reference for the eval harness. The retrieval metric is hit@1 and hit@3, reported
+separately per question type; this note also covers confidence intervals and question-set
+sizing.
 
 ## hit@k
 
@@ -13,12 +14,12 @@ doc within the top k?** Binary per question (1/0), then averaged over all N ques
 - `hit@3` = (# questions where the gold doc is in the **top 3**) / N
 - Always `hit@3 >= hit@1` (top-3 contains top-1 — strictly easier bar).
 
-Worked example (real probes, whole-doc baseline):
+Worked example (whole-doc baseline):
 
 | question | gold doc | rank | hit@1 | hit@3 |
 |---|---|---|---|---|
-| banking-contract negotiation | Aaron Silva | 1 | 1 | 1 |
-| Madagascar offshore center | Ross Fernandes | 67 | 0 | 0 |
+| banking-contract negotiation | Person A | 1 | 1 | 1 |
+| offshore-center location | Person B | 67 | 0 | 0 |
 
 ## Why hit@1 discriminates between configs; why still report hit@3
 
@@ -45,16 +46,16 @@ interval:
 
 Consequences:
 1. **Comparing A vs B:** if their CIs overlap, the difference is within noise — you cannot
-   claim one is better (F5 "CIs overlap -> grow the question set").
+   claim one is better (when CIs overlap, grow the question set).
 2. **Sizing the set:** CI shrinks as 1/sqrt(N) -> halving it needs 4x the questions. A
    hand-authored N=40 set (D-012) can't resolve differences smaller than ~0.14. Know this
    before authoring.
-3. **Sharper test (Component 2 decision):** since both configs run on the SAME questions,
-   a PAIRED test (McNemar's, using only the questions where they disagree) is more powerful
-   than comparing two independent CIs. Method choice (Wilson CI / bootstrap / McNemar) and
-   target N are open harness decisions, folded into Default m.
+3. **Sharper test:** since both configs run on the SAME questions, a PAIRED test (McNemar's,
+   using only the questions where they disagree) is more powerful than comparing two
+   independent CIs. Method choice (Wilson CI / bootstrap / McNemar) and target N are open
+   harness decisions.
 
 ## Distinct from other eval numbers (don't conflate)
 - **hit@k** compares the *retrieved doc text* vs a *gold source span* (D-011, retrieval).
 - **groundedness** judges the *generated answer* vs the *retrieved context* (D-010, primary).
-- **abstention accuracy / false-refusal rate** score refuse-vs-answer behavior (Default l).
+- **abstention accuracy / false-refusal rate** score refuse-vs-answer behavior.

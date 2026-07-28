@@ -13,7 +13,7 @@ Checks the ruler, in both directions, and measures whether it reads the same twi
      judge CATCH a lie? ZERO-TOLERANCE (D-022) -- one trip-bucket item the judge passes as
      grounded trips the alarm (=> bump RUBRIC_VERSION, re-score all runs). Borderline-bucket
      items (manufactured superlative / elaboration drift) are report-only, NEVER trip -- they
-     are the gray zone where careful humans themselves disagree (owner's own refinement).
+     are the gray zone where careful humans themselves disagree.
   3. FLIP-RATE (item 10) -- Sonnet-5 rejects temperature (D-010 amendment), so stability is
      MEASURED: judge each injected + borderline item FLIP_RUNS times; flip-rate = fraction
      non-unanimous. Measured on the hard cases only -- a slam-dunk grounded answer never

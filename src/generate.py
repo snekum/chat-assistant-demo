@@ -45,7 +45,7 @@ SYSTEM = (
     f'exactly: "{REFUSAL_STRING}" Do not guess or infer beyond '
     "what is written.\n"
     "3. Cite your source: after each claim, name the report(s) it came from in square "
-    "brackets, e.g. [Aaron Silva]. Every factual sentence must carry a citation.\n"
+    "brackets, e.g. [Jane Rivera]. Every factual sentence must carry a citation.\n"
     "4. Be concise."
 )
 

@@ -5,7 +5,7 @@ plain dict -- with NO pricing dependency, so the generator (system-under-test) n
 the eval harness. This module holds the PRICES and turns a usage dict into dollars, so the $
 figures live in ONE dated place and can be re-derived from recorded `usage` at any time.
 
-Prices are LOAD-BEARING numbers the owner will cite in interviews -- snapshotted, dated, TUNABLE.
+Prices are LOAD-BEARING numbers -- snapshotted, dated, TUNABLE, re-derivable from recorded usage.
 """
 from __future__ import annotations
 

@@ -1,7 +1,7 @@
 r"""Ingestion: raw .md dossiers -> persons + chunks (data/parsed/{persons,chunks}.jsonl).
 
 Per DECISIONS D-008 (whole-doc: 1 chunk == 1 doc), D-016 (person as first-class entity,
-2-table persons+chunks), and FORKS.md Defaults a, c:
+2-table persons+chunks):
   - read .md as UTF-8; filename stem = canonical_name (deterministic subject map, D-005)
   - person_id = slug(stem); chunk_id = "<person_id>#<chunk_index>" (whole-doc => "#0")
   - drop the trailing "**Sources:**" URL list (opaque vertexaisearch redirects = noise)
@@ -14,7 +14,7 @@ Per DECISIONS D-008 (whole-doc: 1 chunk == 1 doc), D-016 (person as first-class 
 Embeddings are NOT produced here -- they are added at index-build time (src/embedder.py)
 from the chunk text. This file emits only text + metadata.
 
-Anomaly handled: 1/268 docs (Ross Fernandes) has no "**Sources:**" block -> kept whole,
+Anomaly handled: 1/268 docs has no "**Sources:**" block -> kept whole,
 sources_dropped=false.
 """
 from __future__ import annotations
@@ -60,7 +60,7 @@ def main() -> None:
     collisions: list[tuple[str, str]] = []
 
     for path in paths:
-        canonical_name = path.stem  # e.g. "Aaron Silva"
+        canonical_name = path.stem  # the person's name, e.g. "Jane Rivera"
         body, sources_dropped = parse_body(path)
 
         base = slugify(canonical_name)

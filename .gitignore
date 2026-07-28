@@ -24,6 +24,15 @@ runs/**/results.jsonl
 # rankings.jsonl lists ALL 268 doc_ids (real names) per question -- same leak as persons.jsonl.
 runs/**/rankings.jsonl
 
+# --- Internal working docs: the private engineering/judgment ledger. ---
+# Kept on disk (they govern how the project is built) but not part of the public repo face.
+# NB: DECISIONS.md IS public (sanitized ADRs); the rich internal source is notes/ (ignored).
+CLAUDE.md
+ROADMAP.md
+GAPS.md
+FORKS.md
+notes/
+
 # --- Secrets ---
 .env
 .env.*
@@ -38,3 +47,13 @@ __pycache__/
 *.pyc
 *.pyo
 .pytest_cache/
+
+# --- Parked data-anonymization exploration (not part of the shipped system; references real data) ---
+scripts/pseudonymize.py
+
+# --- Judge-calibration artifacts: embed verbatim report text + real names. Keep private. ---
+calibration/
+eval/calibration_injected.jsonl
+
+# --- Internal workflow skill: references the private planning docs. Keep private. ---
+.claude/skills/phase-close/

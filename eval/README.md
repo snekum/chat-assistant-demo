@@ -19,8 +19,8 @@ edit — it proves each gold quote actually matches the parsed corpus (D-011).
 | `author` | `hand` \| `llm-assisted` \| `example-seed` (provenance, D-012) |
 | `notes` | provenance / proof-of-absence / caveats |
 
-`doc_id` is the person's canonical name (= filename stem, e.g. `Aaron Silva`). Gold anchors
-to **doc_id + verbatim quote**, never chunk ids (FORKS.md fixed constraint) — so re-chunking
+`doc_id` is the document's canonical name (= filename stem, e.g. `Jane Doe`). Gold anchors
+to **doc_id + verbatim quote**, never chunk ids (a fixed design constraint) — so re-chunking
 never invalidates the set.
 
 ### Evidence rules (enforced by the validator)
@@ -34,14 +34,15 @@ never invalidates the set.
 ### Authoring an abstention question — the hard part
 You must PROVE the fact is absent from all 268 docs, not just from the obvious one. Grep the
 raw corpus for every phrasing of the fact before trusting a refusal question. Record the
-check in `notes`. Example done for you: `ex-ab-1` (Paladin revenue), verified via grep.
+check in `notes`. Worked example: `ex-ab-1` (a company's revenue), verified via grep.
 
 ## Seed candidates (pointers — turn these into questions; verify every gold span)
 
-**single-hop (LLM-assist ok, then verify):** any specific, checkable fact — GCC founding
-year (2016), a person's degree/university, a company HQ city, a named product. Include some
-**buried facts** (deep in a long dossier) like `ex-sh-2` (Ross/Madagascar) — those are where
-whole-doc is expected to fail, so they turn the dilution finding into a measured number.
+**single-hop (LLM-assist ok, then verify):** any specific, checkable fact — a company
+founding year, a person's degree/university, a company HQ city, a named product. Include some
+**buried facts** (deep in a long dossier) like `ex-sh-2` (a fact far down a long document) —
+those are where whole-doc is expected to fail, so they turn the dilution finding into a
+measured number.
 
 **multi-hop (hand-author):** facts that must be joined across >=2 docs.
 
@@ -57,7 +58,7 @@ CRITICAL distinction — multi-hop is NOT aggregation:
 Because these dossiers do NOT cross-reference each other (D-004), true chain-multi-hop is
 scarce here. The realistic form is a COMPARISON OF TWO NAMED PEOPLE (crisp gold, forces
 retrieval to fetch both):
-- "Which earned their MBA outside the US - Craig Hunter or Ross Fernandes?" (Bombay vs HBS)
+- "Which earned their MBA outside the US - Person A or Person B?" (one abroad, one domestic)
 - "Which of X and Y bootstrapped without venture capital?"
 Also avoid FUZZY gold: "who can help me expand in China" is a judgment, not a checkable
 fact. If you can't point to an exact quote that settles it, it's not a hit@k question.
@@ -66,11 +67,11 @@ fact. If you can't point to an exact quote that settles it, it's not a hit@k que
 doesn't — private financials, home address, exact salary, personal contact info, a fact
 about a person NOT in the corpus at all.
 
-**ambiguity / resolution (see GAPS G-001 — scoring deferred, but seed now):** the two Solaru
-subjects (`Ademola Solaru` vs `Adenuga Solaru`) are a ready-made test: a bare-surname query
-("tell me about Solaru") should trigger a clarify/confirm, not a confident wrong pick. These
-need a THIRD outcome state the current scorer lacks — capture the questions now, wire scoring
-when G-001 is addressed.
+**ambiguity / resolution (scoring deferred, but seed now):** two subjects who share a surname
+are a ready-made test: a bare-surname query ("tell me about <surname>") should trigger a
+clarify/confirm, not a confident wrong pick. These need a THIRD outcome state the current
+scorer lacks — capture the questions now, wire scoring when name-resolution handling is
+added. (Open question: how to score a clarify/confirm outcome.)
 
 ## Sizing (see eval/METRICS.md)
 CI half-width ~ 1.96*sqrt(p(1-p)/N): N=40 -> +-0.14, N=100 -> +-0.09. Start with a hand seed

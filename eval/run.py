@@ -197,7 +197,7 @@ def parse_citations(answer: str, retrieved: list[dict]) -> dict:
 
 
 def warn_if_dirty() -> None:
-    """Repro item 8, dirty-tree rule: WARN, don't block (owner's call 2026-07-25). A hard block
+    """Reproducibility, dirty-tree rule: WARN, don't block. A hard block
     would tax the constant throwaway offline runs that are the harness's tight-feedback point; the
     loud warning is the nudge and config.git.dirty is the permanent audit trail. A comparison-grade
     baseline-of-record must be cut from a clean tree -- this only reminds, it does not enforce."""

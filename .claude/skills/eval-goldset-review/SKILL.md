@@ -1,6 +1,6 @@
 ---
 name: eval-goldset-review
-description: Validate and review the eval GOLD SET (the question ground truth) for the portfolio RAG project. Use whenever the user authors, edits, or asks to check questions in eval/questions.jsonl. Runs the deterministic gold-quote validator, then applies the judgment checks a script can't (absence-proof for abstention, aggregation-vs-multihop, fuzzy gold, person-name resolution) and reports type balance and sizing. This reviews the QUESTION SET only; it does NOT run evals (that is a separate eval-run skill).
+description: Validate and review the eval GOLD SET (the question ground truth) for the RAG project. Use whenever a contributor authors, edits, or asks to check questions in eval/questions.jsonl. Runs the deterministic gold-quote validator, then applies the judgment checks a script can't (absence-proof for abstention, aggregation-vs-multihop, fuzzy gold, name resolution) and reports type balance and sizing. This reviews the QUESTION SET only; it does NOT run evals (that is a separate eval-run skill).
 ---
 
 # Review the eval gold set
@@ -44,9 +44,10 @@ check for each row's type:
     China"), the gold is FUZZY -> reject.
 
 - **single-hop / all types -> person resolution + answer sanity.**
-  - Each person named must resolve to exactly one `person_id` in
-    `data/parsed/persons.jsonl`. Flag ambiguous names (bare surnames, shared first names —
-    e.g. the two Solaru subjects) as a resolution risk (GAPS G-001).
+  - Each name mentioned must resolve to exactly one `person_id` in
+    `data/parsed/persons.jsonl`. Flag ambiguous names (bare surnames, or a surname shared by
+    two subjects) as a resolution risk — the scorer does not yet handle a clarify/confirm
+    outcome.
   - `gold_answer` must actually answer the question and be supported by the evidence quotes,
     not by world knowledge (D-013 contamination).
   - **hit@k is doc_id-anchored** (D-011 amendment 2026-07-24): a gold quote counts as a HIT

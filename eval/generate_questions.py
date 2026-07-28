@@ -1,7 +1,7 @@
-"""Draft single-hop questions from sampled reports (ROADMAP 1c / DECISIONS D-012).
+"""Draft single-hop questions from sampled reports (DECISIONS D-012).
 
-The supervised-expansion half of the eval ladder: single-hop fact retrieval is the PLATEAUED
-type (the owner has learned it), so it's LLM-drafted then human-approved -- never authored
+The supervised-expansion half of the eval set: single-hop fact retrieval is the well-understood
+type, so it's LLM-drafted then human-approved -- never authored
 unattended (D-012). Pipeline per candidate:
 
   sample report -> LLM drafts {question, verbatim quote, answer, fact_type}

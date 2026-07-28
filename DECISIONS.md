@@ -1,783 +1,664 @@
-# Decisions
+# Architecture Decision Record
 
-## D-001: Third-party public companies
-- Date: 2026-07-05
-- Context: Step 1 — pseudonymizer
-- Options:
-  - Keep — max semantic/retrieval value, but kept facts can combine into a re-identification vector.
-  - Redact all — safest, but kills the industry signal that makes the corpus a realistic RAG target and makes QA harder.
-  - Partial (curated keep-list) — keep genuine public entities, map the rest.
-- Decision: Keep public companies, via an explicit allowlist.
-- My reason: Keep public company names since they can't be uniquely used to identify a person and we need those public company names that are well known to understand what domain and big industry the user belongs to. We need connection to real big industries or else it'll be hard for retrieval.
-- Revisit when: a kept org is regional/small enough to fingerprint a subject, or a retrieval eval shows leakage via org co-occurrence.
-
-## D-002: Fake-name generation
-- Date: 2026-07-05
-- Context: Step 1 — pseudonymizer
-- Options:
-  - Random (faker) — trivial, but destroys signal (gender flips, org quirks vanish), harder eyeball-QA.
-  - Themed — low value, collision-prone.
-  - Structured to preserve signal (gender, org morphology) — realistic + QA-able, more effort.
-- Decision: Random-ish names from built-in pools, no gender preservation, minimal effort. (Org *shape* still lightly preserved only so fuzzed domains stay plausible — see D-007.)
-- My reason: I think since it's only a demo project, we don't need this level of anonymyzation. It's okay if gender is mismatched.
-- Revisit when: the corpus moves beyond a demo, or eyeball-QA needs gender/name-shape realism to catch bad mappings.
-
-## D-003: Clean filenames
-- Date: 2026-07-05
-- Context: Step 1 — pseudonymizer
-- Options:
-  - Mapped fake name (`Marcus Reyes.md`) — readable/traceable, but a leak surface and collision-prone.
-  - Opaque ID (`report_001.md`) — leak-proof, collision-proof, but unreadable during QA.
-- Decision: Mapped fake name, with a numeric suffix (1/2) appended on collision. Filename is run through the same verification grep.
-- My reason: Mapped fake name and add a suffix of 1 or 2 to address collision.
-- Revisit when: fake-name collisions become frequent, or a filename leak slips past verification.
-
-## D-004: Partial / bare-surname matching
-- Date: 2026-07-05
-- Context: Step 1 — pseudonymizer
-- Options:
-  - Full-name-only — precise, but under-redacts vs. the sample ("Silva" alone must map).
-  - Global bare-surname replace — high recall, but merges the two different `Solaru` subjects and corrupts finance words (e.g. "Sharpe ratio" for subject Becky Sharpe).
-  - Per-file, subject-scoped — matches the sample with no cross-document collateral.
-- Decision: Per-file bare-surname replacement, scoped to the document's own subject; ambiguous/common-word surnames matched full-name-only via a stoplist.
-- My reason: The surnames are only referred within document, so we just need to make sure that the replaced surname is used throughout the document. Reports don't cross reference other reports — each report contains information about that particular person only, so we can do per-file.
-- Revisit when: reports start cross-referencing other subjects, or a subject's surname is a common/finance word that appears inside their own document.
-
-## D-005: NER engine & precision/recall posture
-- Date: 2026-07-05
-- Context: Step 1 — pseudonymizer
-- Options:
-  - spaCy trf/lg — best recall, heavy, native-code install/DLL risk.
-  - spaCy small — lighter, still native.
-  - Mapping/regex-first, deterministic — NER used only as a discovery aid, pure-Python fallback if the model can't load.
-- Decision: Mapping/regex-first. The subject is mapped deterministically from the filename (bulletproof). spaCy `en_core_web_sm` runs as a discovery aid *if it loads*; a pure-Python capitalized-phrase heuristic is the fallback. NER never silently redacts — its label wins nothing over the known map.
-- My reason: Lets do mapping with regex if spacy might not install. But we can also look at other alternatives for spacy.
-- Revisit when: NER misses materially hurt recall, or a non-native NER option (heuristic/LLM-local) is worth adding.
-- Reality note (2026-07-05): spaCy's training/download path is blocked on this machine by Windows Application Control; inference loaded fine, and on the sample it mislabeled "Paladin" (ORG) as PERSON and dropped "fs" — confirming discovery-only is the right posture.
-
-## D-006: Locations
-- Date: 2026-07-05
-- Context: Step 1 — pseudonymizer
-- Options:
-  - Curated city/state substitution table — consistent fakes, effort + a pool to maintain.
-  - NER GPE mapping — automatic, imprecise.
-  - Leave locations real — zero effort, but the hand-redacted sample did map them.
-- Decision: Leave locations real; no city/state replacement.
-- My reason: No need to replace locations. We don't need fake city or any kinda city replacement.
-- Revisit when: a location + kept-org combination becomes a re-identification vector, or the corpus leaves demo scope.
-- Note: This diverges from the hand-redacted sample, which mapped Austin/Dallas, Texas -> Denver/Boulder, Colorado.
-
-## D-007: Domain / URL fuzzing depth
-- Date: 2026-07-05
-- Context: Step 1 — pseudonymizer
-- Options:
-  - Org roots only — covers company domains, misses personal-name domains.
-  - Org roots + subject surname — covers both common cases seen in Sources.
-  - Aggressive (all tokens) — max recall, high false-positive risk inside URLs.
-- Decision: Fuzz domain fragments derived from mapped org roots + the subject surname (hyphen/concat/underscore/dot variants). Leave the opaque `vertexaisearch...` redirect strings untouched.
-- My reason: let's do org mapping and surname mapping for domains.
-- Revisit when: verification finds a real domain fragment that isn't covered by an org root or the subject surname.
-
-## Status (2026-07-05): PARKED
-The pseudonymizer is intentionally deferred. Decision: build the RAG project on
-the real raw reports first, then swap in fully fake users/data later. The
-architectural decisions above (D-001..D-007) stand and are the deliverable.
-
-Open item when resumed — auto-map scope beyond the deterministic subject:
-- Option A: subject-only auto-map; everything else -> manual override loop.
-- Option B (leaning): auto-map an org ONLY if its root appears as a real domain
-  in that file's `Sources:` block (uses the corpus's own structure as a
-  precision filter; makes spaCy discovery-only and optional).
-- Why parked here: the first cut used spaCy as a silent redactor of everything
-  it tagged -> 11,596 false "orgs" for 284 people, over-redacting the corpus.
-  That's the precision failure to fix before regenerating.
-`scripts/pseudonymize.py` holds the working draft (deterministic subject
-mapping is sound; discovery/verification need the precision + perf rework above).
+This log records the architecture decisions for a retrieval-augmented Q&A system
+over long-form dossiers, together with its evaluation harness. Each entry captures
+the context, the options weighed, the decision, the rationale, and the condition
+that would force a revisit. Numbering begins at D-008 because earlier identifiers
+belong to a separate, parked data-preparation effort outside the scope of the
+retrieval and evaluation system documented here. The D-0xx identifiers are stable
+and are referenced from the code.
 
 ---
 
-# RAG baseline + eval harness (Step 2)
-Decisions D-008..D-013 fill the critical-path forks enumerated in FORKS.md. Each
-carries the owner's own reason (not a replay of the fork tradeoffs) per the CLAUDE.md
-protocol. Step-3 interrogation runs against these.
+## D-008: Chunking unit + embedder
 
-## D-008: Chunking unit + embedder (joint — F1+F2)
-- Date: 2026-07-05
-- Context: Step 2 — RAG baseline. Chunk size and embedder context window are one
-  decision: whole-doc (~2,840 tok p50, ~5,300 max) does NOT fit the small local
-  embedders (bge-small 512 tok, MiniLM 256 tok), so a long-context embedder is forced.
-- Options:
-  - Whole-doc + long-context embedder (Voyage-3 32k / OpenAI 8,191 / local nomic 8,192).
-  - Section-aware (~200 tok) + small local embedder (bge-small/MiniLM revive) — sharper
-    hit-rate, more moving parts than baseline scope calls for.
-  - Fixed-window (512 tok) + small local — template-agnostic but severs `[cite: N]`.
-- Decision: Whole-doc chunks (1/doc). Embedder resolved as a procedure, not a second
-  decision: attempt local `nomic-embed-text-v1.5` ONCE as the single test of the D-005
-  wall; if blocked like spaCy was, fall back to Voyage-3.
-- My reason: The reports all share the same 15 sections, so section-aware would be
-  easy and fine — but I deliberately want to build whole-doc first to feel its pitfalls
-  firsthand, so I can explain the tradeoffs properly when I watch evals fail. Local
-  embedder first because it's free and easy to set up — worth one shot before paying.
-- Revisit when: (chunking) groundedness poor AND traceable to mis-attribution inside a
-  ~2.8k-tok blob, OR multi-hop hit-rate floors low → section-aware (bge-small/MiniLM
-  then revive as local options). (embedder) nomic download blocked → Voyage-3.
-- Guardrails: whole-doc's failure is QUIET — single-hop hit-rate saturates ~100%; watch
-  groundedness + multi-hop, not the headline hit-rate. Timebox the nomic attempt
-  (~15 min); do not rabbit-hole documenting the Windows wall.
+**Context.** Chunk size and embedder context window are a single joint decision:
+a whole document runs ~2,840 tokens at p50 (~5,300 max), which does not fit the
+small local embedders (bge-small at 512 tokens, MiniLM at 256), so choosing
+whole-document chunks forces a long-context embedder.
 
-## D-009: Answer-prompt contract (F6)
-- Date: 2026-07-05
-- Context: Step 2 — whether the bot CAN abstain is a property of the generation prompt,
-  not just the model; the prompt is half the measurement instrument.
-- Options:
-  - Bare "answer from context" — model answers even when context lacks the fact;
-    abstention becomes accidental/unmeasurable.
-  - Answer-only-from-context + may-refuse — minimum that makes abstention measurable.
-  - + mandatory citations (document-level cheap / source-level `[cite: N]` = deferred beast).
-- Decision: "Answer only from the provided reports; if the answer isn't there, say you
-  don't know," PLUS document-level citations (tag each claim with the report it came
-  from). Source-level `[cite: N]` mapping stays deferred. Prompt text versioned +
-  config-snapshotted.
-- My reason: Even the simplest version must be properly grounded in the actual reports,
-  not "it looks okay to my eyes." These are real people — someone may ask the bot
-  important questions before meeting them, and confident false info would ruin our
-  reputation.
-- Revisit when: groundedness/abstention errors trace to prompt phrasing → tighten the
-  contract / consider pulling source-level citations.
-- Guardrail: a citation only counts if the harness VERIFIES it (does the cited report
-  actually contain the claim?). An unverified citation launders hallucinations — the
-  opposite of the goal.
-- Deferred voice note (2026-07-25, surfaced at smoke-run 1b): the contract's USER-FACING voice
-  reveals the internal "reports" framing to end users — every answer opens "Based on the provided
-  reports, ..." and the refusal is "I don't know based on the provided reports." For a product
-  answering questions about real people, that leaks that a dossier is being consulted (owner's
-  concern). This is ONE coherent voice decision spanning ALL outputs (answers + citations +
-  refusals), NOT a refusal-string tweak. Deferred to Phase 3: the coordinator does the user-facing
-  synthesis (with attribution), so presentation voice lives there, while the RAG subagent's internal
-  "reports" framing stays LOAD-BEARING for the D-010 groundedness rubric ("supported by the provided
-  reports alone") and for the deterministic refusal detector (D-019). Rewording now would bump
-  f6-v1 → f6-v2 and reset baseline comparability for a voice we'll re-skin at the agent layer.
-  Trigger: Phase 3 coordinator/synthesis design.
+**Options.**
+- Whole-doc + long-context embedder (Voyage-3 32k, OpenAI 8,191, or local nomic 8,192). Simplest indexing unit; hides intra-document attribution.
+- Section-aware (~200 tok) + small local embedder. Sharper hit-rate, but more moving parts than a baseline needs.
+- Fixed-window (512 tok) + small local. Template-agnostic, but severs the inline `[cite: N]` markers.
 
-## D-010: LLM-as-judge (F3)
-- Date: 2026-07-05
-- Context: Step 2 — the judge is the "ruler"; changing it silently re-scores history.
-- Options:
-  - LLM judge with fixed rubric — handles abstention nuance; risks drift + self-preference.
-  - Deterministic overlap (ROUGE/embedding-sim) — no drift, but can't score abstention
-    and rewards word-overlap over real support.
-  - Human-only — highest trust, doesn't scale.
-- Decision: Pinned Claude Sonnet judge (never the generator's Haiku tier), temp 0,
-  rubric versioned + snapshotted; ~20 human-checked judgments per rubric version as a
-  drift alarm. Groundedness judge sees retrieved context + answer ONLY (never the gold
-  answer); correctness judge sees gold + answer. Groundedness is the PRIMARY metric,
-  correctness secondary; rubric wording = "supported by the provided reports alone."
-- My reason: Judging whether a refusal is appropriate is subjective and needs semantic
-  understanding; relying on word overlap would flag correct answers that share no words
-  with the gold as wrong (high error rate). So an LLM judge, with humans spot-checking a
-  sample as insurance against its drift.
-- Revisit when: human/judge agreement on the calibration sample diverges, OR the rubric
-  changes (then re-score ALL runs under the new version — never mix versions).
-- Temp-0 amendment (2026-07-22): D-010's literal "temp 0" is NOT settable on the shipped judge —
-  claude-sonnet-5 rejects a non-default temperature (400). Shipped resolution (already in
-  judge.py): omit temperature; pin stability via fixed rubric + disabled thinking + json_schema
-  structured output. Judge stays Sonnet-class, never the generator's Haiku tier, so D-010's real
-  invariant (ruler outranks generator) holds. temp-0 determinism was never guaranteed anyway;
-  the residual non-determinism is MEASURED by the Phase-1e judge flip-rate (roadmap Tier-2
-  item 10), not asserted.
+**Decision.** Whole-document chunks (one per document). The embedder is resolved
+as a procedure rather than a second standing decision: attempt local
+`nomic-embed-text-v1.5` once; if the install is blocked in this environment, fall
+back to the Voyage-3 API.
 
-## D-011: Span-matching / hit-rate (F4)
-- Date: 2026-07-05
-- Context: Step 2 — how the grader decides retrieval fetched the right passage. This
-  compares a true quote FROM THE DOCUMENT against the RETRIEVED document text (both
-  source text, no paraphrase) — distinct from groundedness (D-010), which judges the
-  paraphrased generated answer.
-- Options:
-  - Quote-substring exact — simple, but brittle to formatting/`[cite: N]` noise.
-  - Char-offset intersection — precise, but any normalization change breaks all labels.
-  - Fuzzy: normalize-then-exact (safe) / token-overlap threshold (false-hit risk).
-- Decision: Normalize-then-exact containment — normalize BOTH the gold quote and the
-  retrieved text (lowercase, collapse whitespace, strip punctuation + `[cite: N]`
-  markers), then require the full quote to still appear. No loose token-overlap
-  threshold. Gold quotes authored from the parsed/normalized text the system sees, not
-  the raw files.
-- My reason: Internet-sourced reports carry extra whitespace and special characters, so
-  clean before matching; and because this compares retrieved document text against the
-  true source sentence (not the paraphrased answer — that's the LLM judge's job), it
-  should be an exact match after cleaning, with no false-positive inflation of hit-rate.
-- Revisit when: real quotes still fail to match after normalization → fall back to a
-  token-overlap threshold with an explicit TUNABLE value and a false-hit symptom.
-- Amendment — doc_id anchoring (2026-07-24): the shipped hit_at_k matched the gold quote
-  against ANY top-k chunk's text, with NO check that the chunk was the GOLD doc. That silently
-  assumed each gold quote uniquely identifies its doc — true for the 12 hand-authored seeds
-  (distinctive quotes), FALSE once LLM-assisted single-hop generation (D-012) introduced generic
-  quotes ("Santa Clara University" is in 15 docs, "Vice President of Operations" in 5). Failure
-  mode: retrieval MISSES the gold doc but a DIFFERENT doc containing the same phrase lands in
-  top-k → scored a FALSE HIT, inflating hit-rate and hiding the miss. Fix: hit@k (and
-  span-recall) now require `retrieved.doc_id == gold.doc_id AND quote in that chunk` — the quote
-  pins the section (survives section-chunking), the doc_id pins the person. This aligns hit@k with
-  gold_rank, which already matched on doc_id (the two used inconsistent rules before). Surfaced by
-  a cross-doc quote-collision scan while reviewing the first LLM batch. No baseline-of-record
-  existed yet, so no history to re-score; the amended definition is the one the baseline uses.
-  The eval-goldset-review skill did NOT catch this — it reviews the QUESTION SET, not the scorer,
-  and checked quote containment, never uniqueness (a dormant risk absent from the seed data).
+**Rationale.** The documents share a fixed 15-section template, so section-aware
+chunking would be straightforward. Whole-doc was chosen first deliberately, to
+observe its failure modes directly before adding structure. Local embedder first
+because it is free and fast to set up — worth one attempt before paying for an API.
 
-## D-012: Question-set construction (F5)
-- Date: 2026-07-05
-- Context: Step 2 — abstention questions need proof the answer is ABSENT from all 268
-  reports; multi-hop needs facts spanning several. Neither is safe to auto-generate.
-- Options:
-  - Hand-seed + verified LLM expansion — trust where it matters, scale where it's safe.
-  - Fully hand-authored — max trust, small n → noisy metrics.
-  - LLM-generated + verified — scales, but weak on abstention/multi-hop (the key types).
-- Decision: Hand-author the seed set — all abstention + multi-hop by hand — then
-  LLM-assist single-hop drafting with every gold span human-verified. LLMs used to
-  brainstorm alongside me, never to author unattended.
-- My reason: I've built LLM-generated eval sets before and they come out generic; I need
-  my own thinking to make the set exhaustive, using LLMs only to brainstorm together.
-- Revisit when: hand-authored n is too small to separate two configs (confidence
-  intervals overlap) → grow single-hop via verified LLM expansion.
-- Sizing derivation (2026-07-24; n=12 pilot → ~45 target). "Why 45" is COMPUTED, not
-  guessed, and two independent calcs agree:
-  - Precision (Job A, one config's band): a Wilson/normal half-width w at rate p needs
-    n ≈ (1.96/w)² · p(1−p). At the pilot's single-hop p≈0.6: ±0.20→~23, ±0.14→~47,
-    ±0.10→~94, ±0.07→~188. 45 buys ≈±0.14. Halving the band costs ~4× n (the 1/√n wall),
-    so we stop at "narrow enough to decide," not "narrow."
-  - Power (Job B, the Phase-2 chunking A/B — the binding calc): pre-registered δ=0.30,
-    α=.05, power=.80 → ~42/ARM with independent CIs. Drops to ~30–45 TOTAL because the
-    A/B is PAIRED (same Qs both configs) and near-one-directional, so McNemar counts only
-    discordant pairs (~8/p_flip). This is the "why 45 not 84" argument (see item 11).
-  - The n=12 run was the PILOT that supplies p and the rough effect for both formulas.
-  - Growth trigger is PRE-COMMITTED, not eyeballed: → ~75 ONLY IF the A/B delta lands
-    inside the CIs (effect smaller than the 30 pts we powered for ⇒ underpowered for THIS
-    effect). NOT "if the bands still look broad" — that trigger is optional-stopping /
-    p-hacking (peek-and-stop manufactures false positives). `# TUNABLE(n=45 powered for
-    δ=0.30 paired; revisit when the measured A/B effect < 0.30 → recompute n from the
-    observed p_flip, grow toward ~75. Symptom too-small: A/B discordant count < ~8/p_flip
-    ⇒ McNemar can't reach significance.)`
-- Multi-hop sizing (2026-07-26; 2 → 6, authored mh-003..006). Multi-hop has a DIFFERENT sizing
-  logic than single-hop because it measures a DIFFERENT thing: the Phase-3 person-scoped-retrieval
-  before/after (not the Phase-2 chunking A/B, which is single-hop's job). Two facts set the size:
-  - NOT power-limited. The Phase-3 effect is huge and near-deterministic — before ≈ 0 (global top-3
-    rarely fetches BOTH named docs), after ≈ 1 (per-person retrieval fetches each directly). For a
-    PAIRED before/after where nearly every question flips miss→hit, one-way McNemar reaches p<0.05
-    at ~6 discordant pairs (0.5⁶·2 ≈ 0.03). So ~6 already proves Phase-3 worked; more buys almost
-    no statistical certainty.
-  - Coverage-limited, on TWO axes. What binds is representing failure modes, 2 each (n=1/mode can't
-    separate a real mode-effect from a fluke). Axis 1 = retrieval difficulty {different-domain,
-    same-domain, same-name}; the same-name tier tests the RESOLVER (G-001), not just retrieval.
-    Axis 2 = attribute/reasoning type — owner added NUMERIC (2026-07-26) as a mode that must be
-    chosen upfront (no run-trigger surfaces an unrepresented mode): {magnitude/units ($6B vs $21M),
-    year-inversion (older = earlier = smaller number)}. The 6 questions cover both axes via
-    double-duty (mh-003 = diff-domain × magnitude; mh-005 = same-domain × year-inversion), so
-    numeric costs no extra rows. The numeric split is diagnostic: if numeric correctness drops at
-    1d, the two questions say WHICH trap (units vs ordering).
-  - Grow trigger PRE-REGISTERED, per-tier and per-mode: add to a SPECIFIC tier/mode only if its
-    Phase-3 before/after is AMBIGUOUS (e.g. same-name flips 1-of-2, or numeric fails on one trap and
-    not the other). NOT "bands look wide" and NOT "cost is cheap so add more" (both are the
-    optional-stopping / padding anti-pattern the single-hop rule also forbids — restraint is the
-    deliverable). Held behind the trigger: aerospace, charter, GovTech, Notre Dame, Ross/Ross,
-    Grewal-Germany, Cho-biotech (all validated, all duplicates of an already-covered tier).
-    `# TUNABLE(6 = 2 per retrieval-tier + numeric via double-duty; grow a tier/mode only on
-    ambiguous Phase-3 before/after. Symptom too-small: a tier's flip rate is neither ~0 nor ~1.)`
-- Abstention sizing (2026-07-26; 4 → 12, authored ab-004..011). Same 2-per-mode discipline; the
-  mode axis is the REASON the bot should refuse, and the binding cost is the ABSENCE PROOF, which
-  varies enormously by mode — that ordered the work:
-  - CHEAP (no 268-grep): not-in-corpus (proof = persons.jsonl lookup; ab-004/005 also D-013
-    contamination traps), structural-absence (proof = the 15-section template has no contact
-    section, corroborated 0/268 phones & 1/268 emails; ab-006/007 — note "who can introduce me"
-    was REJECTED as structural because a "collaboration & matchmaking signals" section exists),
-    superlative/computed (proof = conceptual: a global max/min over 268 is not computable from a
-    k=3 retrieval; ab-008/009 test locally-grounded-globally-wrong — the win is refusing, the
-    failure is answering "youngest of the 3 retrieved"), off-domain (ab-011).
-  - MEDIUM (one targeted grep) — empty-set: the RISKIEST cheap mode because its proof depends on
-    "nobody matches," knowable ONLY by grep. LIVE PROOF of the false-negative risk: owner proposed
-    "no one is from JNTU"; grep found Sath Nelakonda studied there → REJECTED. Replaced with West
-    Point (grep = 0/268). This is the interview-Q4 answer made concrete.
-  - EXPENSIVE (full grep campaign) — private-fact: already had 2 (ex-ab-1, ab-001); the hard ones
-    were done, so this round was almost entirely cheap.
-  - DEFERRED — advice-reframe ("how should I pivot to SaaS?"): owner's intended gold = REDIRECT to
-    relevant people, but the harness scores binary refuse-vs-answer (refusal_exact); a redirect
-    reads as a non-refusal and would mis-score. Same blocker as the G-001 clarify state — the
-    response-mode enum {answer, refuse, clarify, redirect} doesn't exist yet. Pulled to Phase 3
-    (coordinator/response-mode work), NOT authored now (forcing gold=refuse would bake in the
-    opposite of the intended behavior). `# TUNABLE(12 = 2 per refusal-mode; grow a mode only if its
-    1d refuse-rate is ambiguous. advice-reframe blocked on the response-mode enum — author with it.)`
+**Note — a quiet failure mode.** Whole-doc chunking fails silently: single-hop
+hit-rate saturates near 100% regardless. The metrics that actually move are
+groundedness and multi-hop hit-rate, so those are watched, not the headline
+hit-rate.
 
-## D-013: Real-entity contamination
-- Date: 2026-07-05
-- Context: Step 2 — subjects are real, semi-public people the generator may already know
-  from pretraining, so it can answer correctly WITHOUT retrieval, masking a broken RAG.
-  (Flagged as "D-008" in the external critique / FORKS.md.)
-- Options:
-  - Mitigate + pre-register a formal un-park trigger for the names-only anonymizer.
-  - Anonymize now (names-only) — cleanest, but work now on a deliberately parked thing.
-  - Accept + lean on groundedness — simplest; document the blind spot.
-- Decision: Accept the contamination; do NOT anonymize now. Rely on groundedness
-  (already primary and scored "supported by the reports alone" per D-010) to catch
-  claims sourced from pretraining rather than the reports. The full anonymizer stays
-  PARKED (D-001..D-007). This row itself documents the blind spot.
-- My reason: The pipeline already runs groundedness checks that catch claims sourced
-  from pretraining rather than the actual reports, so stressing over correctness
-  contamination is pointless. And at scale (thousands of users) per-corpus anonymization
-  is impractical when the grounding checks already catch ungrounded claims.
-- Revisit when: correctness reads high while hit-rate stays flat (answers bypassing
-  retrieval) → reconsider the cheap names-only swap. That (high-correctness × low-hit-rate)
-  cell is the contamination signature caught in the wild — gold doc not retrieved yet the
-  answer is right, so it came from pretraining — but it is cheap and n-starved (only fires on
-  questions retrieval happens to miss).
-- Trigger, measured (Phase 1d, closed-book control = roadmap item 14): run the generator with
-  EMPTY context and score correctness on the contamination-prone answerable questions.
-  Closed-book correctness = the share of correctness that is retrieval-INDEPENDENT (pure
-  memory); open−closed = retrieval's actual lift. High closed-book correctness ⇒ correctness
-  is grading Haiku's memory of these real people, not the RAG → fire the names-only swap.
-  Threshold = TUNABLE set at 1d against the observed closed-book distribution; no cutoff
-  pre-committed before data.
-- Drill-closed (2026-07-22): owner articulated the joint signature and derived the closed-book
-  control. Qualifier the drill exposed — the "My reason" above is INCOMPLETE as written:
-  groundedness catches a pretraining claim only when the retrieved context does NOT already
-  contain the fact; when pretraining and context agree, groundedness returns true, so it
-  proves SUPPORT, not that retrieval was load-bearing. Neither groundedness nor hit-rate can
-  establish load-bearing; only retrieval ablation (closed-book) can. Hence item 14 is the real
-  closer for D-013, with groundedness covering the unsupported-claim case.
-- Metric contamination-exposure (2026-07-22): hit-rate is contamination-PROOF (embedder + gold
-  quote only, no generator in the calc — memory can't move it); groundedness is contamination-
-  ROBUST (checks answer ⊆ context, so a memory answer that also sits in context is genuinely
-  grounded — it never gives a false green on hallucination, it just can't reveal source);
-  correctness is contamination-VULNERABLE (memory inflates the pass rate). Consequence: an
-  all-green row (hit + grounded + correct) is NOT a contamination worry — it is carried by the two
-  resistant metrics, and hit-rate independently certifies the retrieval capability memory was
-  suspected of masking. The dangerous false green is correctness-high × hit-rate-LOW (green answer,
-  retrieval absent). This is the architectural reason correctness stays SECONDARY + caveated, not a
-  headline.
-- Closed-book control BUILT + Option A chosen (2026-07-26, item 14 = eval/closed_book.py). Option A =
-  keep the f6 guardrail contract (rule 1 "no prior knowledge, even if you recognize the person" +
-  rule 2 "refuse if absent") with EMPTY context → measures OPERATIONAL contamination (memory leaking
-  PAST the guardrail = the SAME decision the bot faces open-book on a retrieval miss). Rejected B
-  (drop the guardrail, "just answer") = raw memory CAPACITY, an upper bound that never occurs
-  operationally because the guardrail is always present. KEY 1d BASELINE FINDING that pre-answers
-  D-013: single-hop correctness is correct-IFF-retrieved — HIT 29/29 = 1.00, MISS 0/12 = 0.00, ZERO
-  correct-on-miss — so correctness is retrieval-driven, not memory. Closed-book is therefore now
-  CONFIRMATORY (expected ~0); a non-zero result would contradict the baseline and flag a leak.
-  EXECUTED 2026-07-26 (run 20260726T114300Z-closedbook): closed-book correctness = 0.00 across all
-  types (single 0/41, multi 0/6, overall 0/47); guardrail-hold rate 1.00 [0.92, 1.00] — the bot
-  refused ALL 47 answerable questions with empty context, NEVER leaking memory even for recognizable
-  semi-public people. This CONFIRMS zero contamination TWO WAYS (open-book correct-iff-retrieved +
-  closed-book 0.00); open − closed = 0.71 = retrieval's FULL lift (100% of single-hop correctness is
-  retrieval, 0% memory). The D-013 names-only anonymizer trigger does NOT fire; it stays parked.
-  This CLOSES D-013 as a measurement for the current corpus/generator. Related 1d finding: the 30%
-  "false-refusal" rate decomposes to 0 real generation false-refusals (gold retrieved but refused
-  anyway) + 14 correct-given-miss (retrieval missed the gold) — the generator's abstention discipline
-  is perfect; the 30% is just the retrieval miss-rate surfacing as refusals.
-- What anonymization is FOR — the conceptual clarification (2026-07-26, owner drilled this). Anonymizing
-  the corpus is a MEASUREMENT instrument, NOT a production defense; conflating the two is the common
-  error. Two distinct questions need two different tools:
-  - Q1 (measurement): "does the RAG actually work, or is the model's memory masking a broken pipeline?"
-    ANONYMIZATION answers this — fake names the model can't know from pretraining make any correctness
-    provably retrieval-driven. Eval-set only; never touches production.
-  - Q2 (production): "when a real user asks about the real Aaron Silva, does the answer come from the
-    report or from stale pretraining memory?" GROUNDING ENFORCEMENT answers this — contract rule 1
-    ("no prior knowledge, even if you recognize the person") + groundedness judge + refuse-if-absent.
-    It works identically on real and fake names, so it IS the production defense; anonymization is not.
-  Owner's "isn't anonymizing just delayed contamination?" is correct IF anonymization were the
-  production defense — it isn't, so there's no delay: grounding handles production, name-agnostic.
-  The KICKER (why this closes cleanly): the closed-book control is a SECOND, dominant way to answer Q1
-  — anonymization removes the model's MEMORY (fake names); closed-book removes the CONTEXT and checks
-  if correctness survives. It came back 0.00 on the REAL names, so (a) the real-name eval is already
-  memory-clean → anonymization buys nothing for measurement, and (b) it demonstrates Q2 directly (the
-  model refused all 47 real-person questions with no context → grounding holds on people it recognizes).
-  Anonymization would only have earned its cost IF closed-book were HIGH (real-name eval memory-inflated
-  → need a clean test set to trust scores) — and even then it fixes only Q1, never Q2. Closed-book = 0,
-  so the trigger doesn't fire and the anonymizer stays parked.
+**Revisit when.** (Chunking) groundedness is poor and traceable to
+mis-attribution inside a ~2.8k-token blob, or multi-hop hit-rate floors low → move
+to section-aware chunking (bge-small/MiniLM become viable again). (Embedder) the
+local download is blocked → Voyage-3.
 
-## D-014: Vector index / store layer (Default e — vetoed by exception)
-- Date: 2026-07-18
-- Context: Step 2 build. FORKS.md Default (e) was brute-force numpy over an in-memory
-  matrix (268 vectors → sub-ms; ANN premature). User raised their prior stack (Gemini
-  embeddings → FAISS → Postgres metadata) and its post-filter failure mode.
-- Options:
-  - numpy brute-force — exact, zero deps, correct until ~10^5 vectors; no metadata
-    filtering story; nothing to migrate = no scale narrative.
-  - FAISS — fast ANN at millions of vectors, but POST-filter only (retrieve-then-filter
-    can return zero relevant after metadata filtering — the user's real-project scar);
-    two stores (vectors + Postgres metadata) that drift.
-  - pgvector — vectors + metadata in one Postgres store; native PRE-filter
-    (`WHERE ... ORDER BY embedding <=> q`); scales; DB operational cost is dead weight
-    at 268 rows.
-- Decision: pgvector from the start (Postgres + pgvector extension, Docker-local).
-  No ANN index yet — exact search until the corpus grows; HNSW pre-registered (below).
-- My reason: This is a portfolio/interview artifact where working on large data is the
-  expected competency, and I have a concrete near-term plan to generate many fake
-  profiles to simulate a much larger corpus — so growth is planned, not hypothetical.
-  Building pgvector in now avoids a later re-plumb and frees my energy for the chunking
-  and retrieval work, which is where the interesting RAG problems are. Not everything
-  needs to be maximally minimal.
-- Revisit when: (index type) row count climbs to where exact seqscan latency exceeds
-  budget → add an HNSW index and tune `m` / `ef_search`
-  `# TUNABLE(exact is best <~10^4 rows; HNSW trades recall for speed, revisit when
-  filtered-query p99 > budget)`. Symptom wrong: a known-nearest doc drops out of top-k
-  after adding HNSW (approximation error) → raise `ef_search` or revert to exact.
-  (whole choice) if the fake-profile corpus never materializes and the DB stays a
-  268-row toy, the numpy path was cheaper — but the stated plan makes that unlikely.
-- Steelman (numpy, logged once): the strongest scale interview story is the *migration*
-  (numpy → pgvector/HNSW at the measured wall), which building pgvector up front forgoes.
+---
+
+## D-009: Answer-prompt contract
+
+**Context.** Whether the bot *can* abstain is a property of the generation prompt,
+not just the model. The prompt is therefore half the measurement instrument.
+
+**Options.**
+- Bare "answer from context." The model answers even when the context lacks the fact; abstention becomes accidental and unmeasurable.
+- Answer-only-from-context + may-refuse. The minimum that makes abstention measurable.
+- The above + mandatory citations, either document-level (cheap) or source-level `[cite: N]` mapping (substantially more work).
+
+**Decision.** "Answer only from the provided reports; if the answer isn't there,
+say you don't know," plus document-level citations (each claim tagged with the
+report it came from). Source-level `[cite: N]` mapping is deferred. Prompt text is
+versioned and snapshotted with each run's config.
+
+**Rationale.** Even the simplest version must be genuinely grounded in the source
+documents rather than eyeballed as plausible. A confidently false answer about a
+corpus subject is the reputational failure the system exists to prevent.
+
+**Guardrail.** A citation only counts if the harness *verifies* it — does the
+cited report actually contain the claim? An unverified citation launders
+hallucination and defeats the purpose.
+
+**Revisit when.** Groundedness or abstention errors trace to prompt phrasing →
+tighten the contract or pull source-level citations forward.
+
+**Known limitation (deferred).** The contract's user-facing voice exposes the
+internal "reports" framing — answers open with "Based on the provided reports…"
+and refusals read "I don't know based on the provided reports." That framing is
+load-bearing internally: the groundedness rubric ("supported by the provided
+reports alone") and the deterministic refusal detector (D-019) both depend on it.
+Re-skinning the presentation voice belongs at a later coordinator/synthesis layer
+that owns user-facing output, not in this contract, where a reword would reset
+baseline comparability.
+
+---
+
+## D-010: LLM-as-judge
+
+**Context.** The judge is the measurement ruler; changing it silently re-scores all
+prior runs.
+
+**Options.**
+- LLM judge with a fixed rubric. Handles abstention nuance; risks drift and self-preference.
+- Deterministic overlap (ROUGE / embedding similarity). No drift, but cannot score abstention and rewards word overlap over genuine support.
+- Human-only. Highest trust, does not scale.
+
+**Decision.** A pinned Claude Sonnet judge (never the generator's Haiku tier),
+with a versioned, snapshotted rubric, plus ~20 human-checked judgments per rubric
+version as a drift alarm. The groundedness judge sees the retrieved context and the
+answer only (never the gold answer); the correctness judge sees the gold and the
+answer. Groundedness is the primary metric, correctness secondary; the rubric
+wording is "supported by the provided reports alone."
+
+**Rationale.** Judging whether a refusal is appropriate is semantic and subjective;
+word-overlap scoring would flag correct answers that share no vocabulary with the
+gold. An LLM judge handles this, with humans spot-checking a sample as insurance
+against drift.
+
+**Revisit when.** Human/judge agreement on the calibration sample diverges, or the
+rubric changes — in which case all runs are re-scored under the new version and
+versions are never mixed.
+
+**Later refinement — temperature is not settable.** The intended "temperature 0"
+is not accepted by the shipped judge model (it rejects a non-default temperature
+with a 400). Resolution in `judge.py`: omit temperature and pin stability instead
+via the fixed rubric, disabled extended thinking, and a `json_schema` structured
+output. The judge stays Sonnet-class and above the generator's Haiku tier, so the
+real invariant — the ruler outranks the thing it grades — holds. Determinism was
+never guaranteed by temperature anyway; the residual non-determinism is *measured*
+by the judge flip-rate (D-022), not asserted.
+
+---
+
+## D-011: Span-matching / hit-rate
+
+**Context.** How the grader decides retrieval fetched the right passage. This
+compares a true quote *from the document* against the *retrieved document text*
+(both are source text, no paraphrase) — distinct from groundedness (D-010), which
+judges the paraphrased generated answer.
+
+**Options.**
+- Quote-substring exact. Simple, but brittle to formatting and `[cite: N]` noise.
+- Char-offset intersection. Precise, but any normalization change breaks every label.
+- Fuzzy: normalize-then-exact (safe) or token-overlap threshold (false-hit risk).
+
+**Decision.** Normalize-then-exact containment: normalize both the gold quote and
+the retrieved text (lowercase, collapse whitespace, strip punctuation and
+`[cite: N]` markers), then require the full quote to still appear. No loose
+token-overlap threshold. Gold quotes are authored from the parsed/normalized text
+the system actually sees, not the raw files.
+
+**Rationale.** Source documents carry stray whitespace and special characters, so
+text is cleaned before matching. Because this compares retrieved source text
+against the true source sentence (not the paraphrased answer — that is the LLM
+judge's job), an exact match after cleaning is correct and avoids false-positive
+inflation of hit-rate.
+
+**Revisit when.** Real quotes still fail to match after normalization → fall back
+to a token-overlap threshold with an explicit tunable value and a documented
+false-hit symptom.
+
+**Later refinement — doc_id anchoring.** The original `hit_at_k` matched the gold
+quote against *any* top-k chunk's text with no check that the chunk came from the
+gold document. That silently assumed each gold quote uniquely identifies its
+document — true for the distinctive hand-authored seed quotes, false once
+LLM-assisted single-hop generation introduced generic quotes (e.g. a university
+name appearing in 15 documents, a job title in 5). Failure mode: retrieval *misses*
+the gold document, but a *different* document containing the same phrase lands in
+top-k → scored a false hit, inflating hit-rate and hiding the miss. Fix: hit@k (and
+span-recall) now require `retrieved.doc_id == gold.doc_id AND quote in that chunk` —
+the quote pins the section (surviving section-chunking) and the doc_id pins the
+subject. This also aligns hit@k with gold_rank, which already matched on doc_id.
+Surfaced by a cross-document quote-collision scan of the first LLM batch; caught
+before any baseline-of-record existed, so there was no history to re-score.
+
+---
+
+## D-012: Question-set construction
+
+**Context.** Abstention questions need proof the answer is *absent* from all 268
+reports; multi-hop questions need facts spanning several. Neither is safe to
+auto-generate.
+
+**Options.**
+- Hand-seed + verified LLM expansion. Trust where it matters, scale where it is safe.
+- Fully hand-authored. Maximum trust, small n → noisy metrics.
+- LLM-generated + verified. Scales, but weak precisely on abstention and multi-hop — the types that matter most.
+
+**Decision.** Hand-author the seed set — all abstention and all multi-hop by hand —
+then LLM-assist single-hop drafting with every gold span human-verified. LLMs
+brainstorm alongside the author; they never author unattended.
+
+**Rationale.** LLM-generated eval sets tend to come out generic; deliberate human
+thinking is what makes the set exhaustive, with LLMs used only to brainstorm.
+
+**Revisit when.** The hand-authored n is too small to separate two configurations
+(confidence intervals overlap) → grow single-hop via verified LLM expansion.
+
+**Sizing — single-hop (n=12 pilot → ~45 target).** The target is computed, and two
+independent calculations agree:
+- *Precision (one config's band).* A Wilson/normal half-width `w` at rate `p` needs `n ≈ (1.96/w)²·p(1−p)`. At the pilot's single-hop p≈0.6: ±0.20→~23, ±0.14→~47, ±0.10→~94, ±0.07→~188. 45 buys ≈±0.14. Halving the band costs ~4× the sample (the 1/√n wall), so the stopping point is "narrow enough to decide," not "narrow."
+- *Power (the chunking A/B — the binding calc).* Pre-registered δ=0.30, α=.05, power=.80 → ~42/arm with independent CIs. This drops to ~30–45 *total* because the A/B is paired (same questions both configs) and near one-directional, so McNemar counts only discordant pairs (~8/p_flip). This is the "why 45, not 84" argument.
+- Growth trigger is pre-committed: grow toward ~75 *only if* the A/B delta lands inside the CIs (i.e. the true effect is smaller than the 30 points powered for, so the test is underpowered for *this* effect). Not "if the bands still look broad" — that is optional-stopping / p-hacking. `# TUNABLE(n=45 powered for δ=0.30 paired; recompute from observed p_flip if the measured A/B effect < 0.30. Symptom too-small: discordant count < ~8/p_flip ⇒ McNemar can't reach significance.)`
+
+**Sizing — multi-hop (2 → 6).** Multi-hop measures a different thing than
+single-hop (a person-scoped-retrieval before/after, not the chunking A/B), so it
+sizes differently:
+- *Not power-limited.* The effect is large and near-deterministic — before ≈ 0 (a global top-3 rarely fetches *both* named documents), after ≈ 1 (per-person retrieval fetches each directly). For a paired before/after where nearly every question flips miss→hit, one-way McNemar reaches p<0.05 at ~6 discordant pairs (0.5⁶·2 ≈ 0.03). So ~6 already proves the feature worked; more buys almost no certainty.
+- *Coverage-limited on two axes*, 2 per mode (n=1/mode can't separate a real mode-effect from a fluke). Axis 1 = retrieval difficulty {different-domain, same-domain, same-name}, where the same-name tier tests the disambiguating resolver, not just retrieval. Axis 2 = attribute/reasoning type, including a numeric mode {magnitude/units, year-inversion where older = earlier = smaller number}. The 6 questions cover both axes via double-duty, so numeric costs no extra rows and stays diagnostic (a numeric-only drop says *which* trap failed).
+- Grow trigger is pre-registered per tier and per mode: add to a specific tier/mode only if its before/after is *ambiguous* (e.g. same-name flips 1-of-2, or numeric fails one trap but not the other). Not "bands look wide" and not "it's cheap, add more." `# TUNABLE(6 = 2 per retrieval-tier + numeric via double-duty; grow a tier/mode only on ambiguous before/after. Symptom too-small: a tier's flip rate is neither ~0 nor ~1.)`
+
+**Sizing — abstention (4 → 12).** Same 2-per-mode discipline; the mode axis is the
+*reason* the bot should refuse, and the binding cost is the absence proof, which
+varies enormously by mode:
+- *Cheap (no full-corpus grep):* not-in-corpus (proof = a subject-registry lookup), structural-absence (proof = the 15-section template has no contact section, corroborated by 0/268 phones and 1/268 emails), superlative/computed (proof is conceptual — a global max/min over 268 subjects is not computable from a k=3 retrieval; these test locally-grounded-but-globally-wrong, where the failure is answering "youngest of the 3 retrieved"), and off-domain.
+- *Medium (one targeted grep) — empty-set:* the riskiest cheap mode, because its proof depends on "nobody matches," knowable only by grep. Concrete example of the false-negative risk: a proposed "no one is from university X" was rejected when a grep found a subject who studied there; it was replaced with an institution the grep confirmed at 0/268.
+- *Expensive (full grep campaign) — private-fact:* the hard ones were already authored, so this round was almost entirely cheap.
+- *Deferred — advice-reframe* ("how should I pivot to SaaS?"): the intended gold behavior is to *redirect* to relevant subjects, but the harness scores a binary refuse-vs-answer, and a redirect reads as a non-refusal and would mis-score. This needs a response-mode enum {answer, refuse, clarify, redirect} that does not yet exist; forcing gold=refuse would bake in the opposite of the intended behavior. `# TUNABLE(12 = 2 per refusal-mode; grow a mode only if its refuse-rate is ambiguous. advice-reframe blocked on the response-mode enum.)`
+
+---
+
+## D-013: Base-model contamination of correctness
+
+**Context.** Corpus subjects may appear in the base model's pretraining data, so
+the generator could answer a question correctly *without* retrieval — masking a
+broken RAG pipeline behind memorized facts.
+
+**Options.**
+- Mitigate + pre-register a formal trigger for a names-only anonymizer.
+- Anonymize now (names-only). Cleanest, but invests work in a deliberately parked component.
+- Accept + lean on groundedness. Simplest; document the blind spot.
+
+**Decision.** Accept the contamination; do not anonymize now. Rely on groundedness
+(already the primary metric, scored "supported by the reports alone" per D-010) to
+catch claims sourced from pretraining rather than the reports. The full anonymizer
+stays parked. This entry documents the blind spot.
+
+**Rationale.** The pipeline already runs groundedness checks that catch claims not
+supported by the retrieved reports, and at scale per-corpus anonymization is
+impractical when grounding enforcement already catches ungrounded claims.
+
+**A qualifier the analysis exposed.** The rationale above is incomplete as first
+written: groundedness catches a pretraining-sourced claim only when the retrieved
+context does *not* already contain the fact. When pretraining and context agree,
+groundedness returns true — proving *support*, not that retrieval was
+*load-bearing*. Neither groundedness nor hit-rate can establish load-bearingness;
+only a retrieval ablation (closed-book) can.
+
+**Metric exposure to contamination.** hit-rate is contamination-*proof* (embedder +
+gold quote only, no generator in the calculation — memory cannot move it);
+groundedness is contamination-*robust* (checks answer ⊆ context, so a memorized
+answer that also sits in context is genuinely grounded — it never gives a false
+green on hallucination, it just can't reveal source); correctness is
+contamination-*vulnerable* (memory inflates the pass rate). Consequently an
+all-green row (hit + grounded + correct) is not a contamination worry — it is
+carried by the two resistant metrics, and hit-rate independently certifies the
+retrieval capability memory was suspected of masking. The dangerous false green is
+correctness-high × hit-rate-*low* (a green answer with retrieval absent). This is
+the architectural reason correctness stays secondary and caveated.
+
+**Closed-book control — result.** A closed-book control (`eval/closed_book.py`)
+runs the generator with *empty* context, keeping the full answer contract (rule 1:
+"no prior knowledge, even if you recognize the person"; rule 2: "refuse if
+absent"). This measures *operational* contamination — memory leaking past the
+guardrail, the same decision the bot faces open-book on a retrieval miss — rather
+than raw memory capacity (an upper bound that never occurs operationally, since the
+guardrail is always present). Executed result: closed-book correctness = **0.00**
+across all types (single 0/41, multi 0/6, overall 0/47); guardrail-hold rate 1.00
+[0.92, 1.00] — the bot refused all 47 answerable questions with empty context,
+never leaking memory even for recognizable subjects. This confirms zero
+contamination two ways: open-book correctness is correct-iff-retrieved (HIT 29/29 =
+1.00, MISS 0/12 = 0.00, zero correct-on-miss), and closed-book is 0.00. The gap
+open − closed = 0.71 is retrieval's full lift (100% of single-hop correctness is
+retrieval, 0% memory). The names-only anonymizer trigger does not fire; it stays
+parked. Related finding: the 30% "false-refusal" rate decomposes to 0 real
+generation false-refusals (gold retrieved but refused anyway) + 14 correct-given-miss
+(retrieval missed the gold) — the generator's abstention discipline is perfect, and
+the 30% is simply the retrieval miss-rate surfacing as refusals.
+
+**What anonymization is for — a scope clarification.** Anonymizing the corpus is a
+*measurement* instrument, not a *production* defense; conflating the two is the
+common error. Two distinct questions need two different tools:
+- *Q1 (measurement):* "does the RAG actually work, or is the model's memory masking a broken pipeline?" Anonymization answers this — fake names the model cannot know make any correctness provably retrieval-driven. Eval-set only; never touches production.
+- *Q2 (production):* "when a user asks about a real subject, does the answer come from the report or from stale pretraining memory?" Grounding enforcement answers this — contract rule 1 + the groundedness judge + refuse-if-absent. It works identically on real and fake names, so it *is* the production defense; anonymization is not.
+
+The closed-book control is a second, dominant way to answer Q1: anonymization
+removes the model's *memory* (fake names); closed-book removes the *context* and
+checks whether correctness survives. It came back 0.00 on the real names, so (a)
+the eval set is already memory-clean → anonymization buys nothing for measurement,
+and (b) it demonstrates Q2 directly (the model refused all 47 subject questions with
+no context → grounding holds even on subjects it recognizes). Anonymization would
+have earned its cost only if closed-book were *high*, and even then it fixes only
+Q1, never Q2.
+
+**Revisit when.** Correctness reads high while hit-rate stays flat (answers
+bypassing retrieval) → reconsider the cheap names-only swap. That
+(high-correctness × low-hit-rate) cell is the contamination signature; it is cheap
+but n-starved, firing only on questions retrieval happens to miss. For the current
+corpus and generator this decision is closed as a measurement.
+
+---
+
+## D-014: Vector index / store layer
+
+**Context.** With 268 vectors, a brute-force numpy scan over an in-memory matrix is
+sub-millisecond and an ANN index is premature. But a prior project's stack (managed
+embeddings → FAISS → Postgres metadata) had exhibited a post-filter failure mode
+worth designing against.
+
+**Options.**
+- numpy brute-force. Exact, zero dependencies, correct until ~10⁵ vectors; no metadata-filtering story; nothing to migrate, so no scale narrative.
+- FAISS. Fast ANN at millions of vectors, but *post*-filter only (retrieve-then-filter can return zero relevant rows after metadata filtering); two stores (vectors + Postgres metadata) that can drift.
+- pgvector. Vectors and metadata in one Postgres store; native *pre*-filter (`WHERE … ORDER BY embedding <=> q`); scales; DB operational cost is dead weight at 268 rows.
+
+**Decision.** pgvector from the start (Postgres + pgvector extension, Docker-local).
+No ANN index yet — exact search until the corpus grows; HNSW pre-registered below.
+
+**Rationale.** Growth is planned, not hypothetical: there is a concrete near-term
+plan to generate many synthetic profiles to simulate a much larger corpus.
+Building pgvector in now avoids a later re-plumb and frees effort for the chunking
+and retrieval work, which is where the interesting problems are. Not everything
+needs to be maximally minimal.
+
+**Alternative considered (numpy).** The strongest scale narrative is the
+*migration* itself (numpy → pgvector/HNSW at the measured wall), which building
+pgvector up front forgoes. If the synthetic-profile corpus never materializes and
+the DB stays a 268-row toy, the numpy path would have been cheaper — but the stated
+plan makes that unlikely.
+
+**Revisit when.** (Index type) row count climbs to where exact seqscan latency
+exceeds budget → add an HNSW index and tune `m` / `ef_search`. `# TUNABLE(exact is
+best <~10⁴ rows; HNSW trades recall for speed; revisit when filtered-query p99 >
+budget)`. Wrong-symptom: a known-nearest document drops out of top-k after adding
+HNSW (approximation error) → raise `ef_search` or revert to exact.
+
+---
 
 ## D-015: Embedder abstraction layer
-- Date: 2026-07-18
-- Context: Step 2 build. D-008 leaves the embedder unresolved as a procedure (attempt
-  local nomic, else Voyage-3) — a named, imminent variation point.
-- Decision: A thin `Embedder` interface (`embed_documents` / `embed_query`, exposing
-  `model_id` + `dim`, hiding the nomic prefix / Voyage `input_type` asymmetry), two
-  implementations (NomicLocal, VoyageAPI), over an embedding cache keyed by
-  `(model_id, sha256(normalized_text))` (Default i).
-- My reason: justified NOT by speculative future-proofing but by the concrete
-  unresolved D-008 fork — we don't yet know which embedder ships, so a swap is
-  near-certain. Correction pinned: the interface makes the CODE swap cheap; it does
-  NOT make embeddings survive a model change (different vector space → full re-embed +
-  all hit-rate history invalidated, per D-008 guardrail). The CACHE, not the interface,
-  is what makes a swap operationally cheap (new model_id → cache-miss → auto re-embed).
-- Revisit when: a third embedder or a reranker enters → widen the interface; never let
-  the abstraction imply a model swap is "free" (the re-embed + comparability break is
-  inherent).
 
-## D-016: Person as first-class entity (2-table schema)
-- Date: 2026-07-18
-- Context: Step 2 build, pgvector schema. RAG will be ONE subagent of a chatbot; a query
-  about a named person must resolve name → person_id, then fetch that person's chunks
-  (a metadata PRE-filter — the capability that justified pgvector over numpy, D-014).
-  The data has three grains — person / document / chunk — currently 1:1:1.
-- Options:
-  - Denormalized (subject as a text column on chunks) — simplest; no resolution anchor;
-    drifts once one person has >1 chunk.
-  - 2-table (persons + chunks; embedding on chunks, person_id FK) — models the
-    resolution target and the retrieval unit distinctly; section-chunking becomes a data
-    change (more chunk rows, same person_id), not a schema migration.
-  - 3-table (persons + documents + chunks) — fully normalized but a redundant 1:1:1 join
-    today.
-- Decision: 2-table (persons + chunks). `person_id` slug (NOT `user_id` — reserve "user"
-  for the chatbot's end-users). Embedding lives on chunks. `meta jsonb` on persons for
-  future resolution/filter metadata (industry, company, aliases). No `documents` table
-  until a person has >1 report. Resolution LOGIC (name→person_id, disambiguation) is
-  DEFERRED to a router subagent; the table is only the anchor.
-- My reason (user): eventually this is a chatbot with RAG as one subagent, so a user
-  asking about a specific person should resolve to a person_id and then fetch that
-  person's chunks/report — model the person as first-class now rather than migrate later.
-- Revisit when: a person gains multiple reports → insert a `documents` table between;
-  resolution ambiguity bites (two Solaru subjects per D-004; real-world name collisions,
-  e.g. the Ross Fernandes dossier flags an academic + a footballer) → build the
-  disambiguating resolver.
+**Context.** D-008 leaves the embedder unresolved as a procedure (attempt local
+nomic, else Voyage-3) — a named, imminent variation point.
+
+**Decision.** A thin `Embedder` interface (`embed_documents` / `embed_query`,
+exposing `model_id` and `dim`, hiding the nomic prefix and Voyage `input_type`
+asymmetry), with two implementations (NomicLocal, VoyageAPI), over an embedding
+cache keyed by `(model_id, sha256(normalized_text))`.
+
+**Rationale.** Justified not by speculative future-proofing but by the concrete
+unresolved embedder choice — the shipping embedder is not yet known, so a swap is
+near-certain. Precise scope: the interface makes the *code* swap cheap; it does not
+make embeddings survive a model change (a different vector space means a full
+re-embed and invalidation of all hit-rate history). The *cache*, not the interface,
+is what makes a swap operationally cheap (a new `model_id` is a cache miss → auto
+re-embed).
+
+**Revisit when.** A third embedder or a reranker enters → widen the interface.
+Never let the abstraction imply a model swap is "free"; the re-embed and
+comparability break are inherent.
+
+---
+
+## D-016: Person as a first-class entity (2-table schema)
+
+**Context.** RAG is one subagent of a larger chatbot. A query about a named person
+must resolve name → person_id, then fetch that person's chunks (a metadata
+*pre*-filter — the capability that justified pgvector over numpy, D-014). The data
+has three grains — person / document / chunk — currently 1:1:1.
+
+**Options.**
+- Denormalized (subject as a text column on chunks). Simplest; no resolution anchor; drifts once one person has >1 chunk.
+- 2-table (persons + chunks; embedding on chunks, person_id FK). Models the resolution target and the retrieval unit distinctly; section-chunking becomes a data change (more chunk rows, same person_id), not a schema migration.
+- 3-table (persons + documents + chunks). Fully normalized but a redundant 1:1:1 join today.
+
+**Decision.** 2-table (persons + chunks). `person_id` slug (not `user_id` — "user"
+is reserved for the chatbot's end-users). Embedding lives on chunks. A `meta jsonb`
+column on persons holds future resolution/filter metadata (industry, company,
+aliases). No `documents` table until a person has >1 report. Resolution *logic*
+(name→person_id, disambiguation) is deferred to a router subagent; the table is
+only the anchor.
+
+**Rationale.** Since RAG is one subagent of a chatbot, a query about a specific
+person should resolve to a person_id and then fetch that person's chunks — model
+the person as first-class now rather than migrate later.
+
+**Revisit when.** A person gains multiple reports → insert a `documents` table
+between. Resolution ambiguity bites (two subjects sharing a surname, per D-011's
+collision case; real-world name collisions, e.g. a dossier that flags two distinct
+public figures sharing a name) → build the disambiguating resolver.
+
+---
 
 ## D-017: Model provider (single-provider default; cross-provider judge deferred)
-- Date: 2026-07-21
-- Context: The generator (D-009 / Default h, `claude-haiku-4-5`) and the judge (D-010,
-  `claude-sonnet-5`) both run on Anthropic Claude. Provider was an INHERITED default, never
-  justified against alternatives until now (surfaced under interrogation, 2026-07-21). The
-  embedder is local nomic, so this touches only generation + judging — not retrieval.
-- Options:
-  - Single-provider (Anthropic) for both gen + judge — one SDK / key / billing surface, fewer
-    things that can silently drift; but the judge shares the generator's model family, so a
-    mild "Claude prefers Claude-shaped output" self-preference / family bias can't be ruled out
-    (the F3 conflict, only partly resolved by the Haiku↔Sonnet tier gap in D-010).
-  - Cross-provider JUDGE (a GPT-/Gemini-class judge grading the Claude generator) — strongest
-    kill for family bias; F3 lists cross-family as a legitimate option. Costs a second SDK /
-    key / failure-mode and a second thing that can change under you.
-  - Multi-provider generator too — max diversity, but the generator is already a per-run
-    variable (Default h) and multiplying providers there is scope with no measurement payoff.
-- Decision: Single-provider (Anthropic) for the baseline. A cross-provider judge is
-  PRE-REGISTERED as the response IF calibration shows family bias — not adopted blind.
-- My reason (confirmed 2026-07-22): Stay single-provider (Claude family) for the baseline —
-  cheapest tier for the generator (Haiku), one tier up for the judge (Sonnet), so the ruler
-  outranks the thing it grades. Escalate only on evidence, and note the two escalations are
-  different axes: bump the GENERATOR tier if measured numbers show it underperforming (a
-  cost/quality call, Default h), and move the JUDGE cross-family only if G-002 calibration shows
-  same-family bias (an independence call). I have OpenAI + Gemini keys on hand, but a second
-  provider is a second key and a second drift surface — not worth buying for diversity's sake; it
-  only earns that cost at the judge, once calibration data asks for it.
-- Revisit when: the G-002 judge-calibration sample shows the Sonnet judge systematically
-  over-rating Haiku-family (Claude) outputs vs the blind human labels → move the JUDGE
-  cross-family (the generator can stay Claude; it's the ruler that must be independent). Also
-  revisit on a provider outage / model deprecation that forces a swap.
-- Steelman (cross-provider judge, logged once): judge independence is the one axis where
-  provider diversity is a real quality gain, not just added complexity — a cross-family judge
-  cannot share the generator's blind spots by construction. The only reason to defer is that
-  G-002 hasn't yet told us whether same-family judging is measurably biased here.
 
-## D-018: Ranking-record depth (Phase 1a instrument, Tier-1 item 3)
-- Date: 2026-07-22
-- Context: store.search discards everything past `LIMIT k`; results.jsonl keeps only top-3. The
-  exact seqscan already ranks all 268 chunks (D-014), so gold-rank + MRR + a near/deep-miss
-  taxonomy are FREE to record and impossible to backfill into write-once runs. hit@1 stays the
-  only headline; ranks are the zero-cost diagnostic that routes the next build (miss at rank 2-5
-  = ranking problem -> rerank/bump-k; miss at rank 40+ = representation problem -> re-chunk).
-- Options:
-  - (a) gold-rank-only via a per-gold count query — cheapest, exact rank + MRR, but records
-    nothing about WHO outranked the gold (no wrong-person@1 taxonomy).
-  - (b) top-N (doc_id+score) — near-miss neighborhood + gold-rank if gold<=N; a deep gold (rank
-    67) records only as ">N", losing the exact rank; adds a silent N.
-  - (c) full 268-row ranking (doc_id+score, no text) — exact gold rank always, full MRR, complete
-    taxonomy, re-analysable forever; ~10 KB/question (~450 KB/run).
-- Decision: (c) full-ranking now, doc_id+score only (no text — the gold-quote match already ran
-  offline). Pre-registered migration to (b) threshold-N once the chunking strategy is frozen.
-- My reason: while I'm still figuring out chunking I need to see whether a miss is a near-miss
-  (ranking fix) or way off (re-chunk), so I rank everything — I'd do this at a company too, on a
-  few hundred docs even if the corpus is thousands. Once chunking is settled there's no reason to
-  rank everything; a threshold N suffices. And starting with (c) is what GIVES me the gold-rank
-  distribution to set that N empirically instead of guessing.
-- Threshold-N derivation (pre-registered, applied at migration): set N from the observed
-  gold-rank distribution of the FROZEN config, not a priori. N = max( near-miss-band tail [~95th
-  pct of gold-rank among questions a reranker could still rescue], distractor-head [top ~5-10, to
-  see who outranked the gold] ) — both modest, ~15-20 here. Past N collapses to ONE
-  "deep-miss / representation" bucket because the action (re-chunk) is identical for rank 40 vs
-  200. `# TUNABLE(N read off the frozen-config gold-rank curve; revisit when the embedder or
-  chunk scheme changes -> representation shift moves the distribution -> re-measure N or go full
-  again. Symptom too-small: a non-trivial fraction of gold lands in ">N" AND you keep needing the
-  exact deep rank to decide something.)`
-- MRR note: MRR is single-gold-natural; multi-hop records each gold doc's rank and feeds min-rank
-  (best-placed gold) as the MRR input, so the metric survives Phase-2 re-chunking (a doc's rank =
-  best rank among its chunks).
-- Revisit when: chunking + embedder frozen -> cut full-ranking to threshold-N (above); or the
-  corpus grows past ~10^4 where full-ranking-per-question artifacts bloat and option (a)'s
-  targeted count becomes the scalable path (premature at 268).
+**Context.** The generator (`claude-haiku-4-5`) and the judge (`claude-sonnet-5`)
+both run on Anthropic Claude. Provider was an inherited default, never justified
+against alternatives until now. The embedder is local nomic, so this touches only
+generation and judging — not retrieval.
 
-## D-019: Refusal label — deterministic string vs judge (Tier-1 item 5)
-- Date: 2026-07-24
-- Context: `is_refusal` is the per-answer label that does DOUBLE duty — it scores both abstention
-  lanes (abstention_accuracy, false_refusal_rate) AND filters the PRIMARY groundedness
-  denominator (only non-refusals are grounded, run.py). It shipped as the JUDGE's semantic
-  boolean: a drift-prone model sitting inside the primary metric. But the generation contract
-  (f6-v1) already MANDATES an exact refusal sentence ("I don't know based on the provided
-  reports."), so a deterministic detector is available for free. The online lanes have never
-  executed, so whether Haiku actually emits the exact string is unmeasured.
-- Options:
-  - Judge-only (status quo): semantic `is_refusal` drives the metrics. Catches hedged/off-script
-    refusals, but a model boolean drives the primary denominator and can drift across runs; a
-    judge false-"refusal" would exclude a possible hallucination from groundedness (the
-    reputational-risk direction, D-009).
-  - String-only: deterministic normalized-EQUALITY match against the mandated sentence.
-    Drift-proof, contamination-proof, and can't wrongly pull a real answer out of the denominator
-    (a substantive answer never normalizes to exactly the refusal sentence); but a refusal in the
-    bot's own words scores as a non-refusal (undercounts abstention IF the bot goes off-script).
-  - Both — string-authoritative + judge cross-check + divergence log (CHOSEN): string drives the
-    metrics; judge `is_refusal` is recorded; disagreements are counted (judge_divergence_n/rate/
-    divergent_ids) as the alarm that the bot went off-script, and as a G-002 calibration feed.
-- Decision: Record both. `refusal_exact` (normalized equality, reusing the D-011 normalizer) is
-  the OFFICIAL label for abstention + the groundedness filter; judge `is_refusal` kept as a
-  recorded cross-check; divergence logged in the abstention block. REFUSAL_STRING extracted as a
-  named constant in generate.py so the detector and the prompt can't drift (SYSTEM text
-  byte-identical -> f6-v1 unchanged). Cost/latency are non-differentiators (no extra API call —
-  both labels come from data already collected).
-- My reason: Start with the dumbest thing that still measures — a plain string check on the exact
-  sentence I already tell the bot to use — keep a drifty model out of my primary metric, then
-  measure and only graduate to the judge's semantic label if the divergence log shows the bot
-  won't obey "reply exactly." I don't yet know if it goes off-script; the divergence count is
-  what will tell me.
-- Revisit when: the smoke run (1b) shows material divergence AND inspection shows the divergent
-  cases are genuine off-script refusals (not judge errors) -> either tighten the contract (bump
-  f6-v2) or promote the judge to official. No cutoff pre-committed before data (same posture as
-  D-013's closed-book threshold). `# TUNABLE(equality not containment; symptom wrong: divergence
-  fills with genuine refusals that merely appended a citation/token -> loosen to containment.)`
-- Steelman (judge-authoritative, logged once): for abstention questions specifically, a refusal
-  in the bot's own words is genuinely CORRECT behavior, and string-only scores it as a
-  non-refusal — so if the bot hedges often, the judge measures the metric I care most about (did
-  it correctly decline?) more faithfully than the string. The judge wins the moment the
-  divergence log shows the bot won't obey the exact-string contract.
+**Options.**
+- Single-provider (Anthropic) for both. One SDK, key, and billing surface, fewer things that can drift; but the judge shares the generator's model family, so a mild same-family self-preference cannot be ruled out (only partly mitigated by the Haiku↔Sonnet tier gap in D-010).
+- Cross-provider *judge* (a GPT-/Gemini-class judge grading the Claude generator). Strongest kill for family bias; costs a second SDK, key, and failure mode.
+- Multi-provider generator too. Maximum diversity, but the generator is already a per-run variable and multiplying providers there is scope with no measurement payoff.
 
-## D-020: Citation instrument — validity-only vs coverage (Tier-1 item 6)
-- Date: 2026-07-24
-- Context: the generation contract (f6-v1) mandates a document-level [doc_id] tag after every
-  claim, but the harness never reads them — D-009's own "an unverified citation launders
-  hallucinations" is unenforced. doc_id == the person's full name, and the citation form is
-  [Full Name] (contract allows "report(s)" -> plural brackets), so a cited tag matches a
-  retrieved doc_id BY NAME with no resolution layer needed.
-- Options:
-  - A (validity + counts): deterministic parse — extract [..] tags, split plural brackets,
-    normalize, classify each as valid (name is in the RETRIEVED set for this question) or
-    fabricated (not). Record counts + has_fabricated + has_any_citation. No API. Catches the two
-    real failures: a fabricated citation (cited a doc it was never shown — the laundering signal,
-    and a contamination tell per D-013) and a zero-citation answer. Blind to graded per-sentence
-    coverage.
-  - B (A + coverage): also split the answer into sentences and score the fraction of FACTUAL
-    sentences carrying a tag. Adds a sentence-splitter TUNABLE and a fuzzy "what is a factual
-    sentence" denominator (a mini-judge problem — a naive splitter counts "Here's what I found:").
-  - C (B + support): judge that the cited doc actually CONTAINS the claim. Rejected — that is the
-    groundedness judge's job (D-010), duplicated per-citation and expensive.
-- Decision: A. A deterministic per-answer citation parser (`parse_citations`, sibling of
-  is_exact_refusal): a `citations` block per answer + a `citations` summary section
-  (fabricated_citation_rate, zero_citation_rate, mean citations/answer) measured over NON-REFUSAL
-  answers. Validity is checked against the RETRIEVED set for that question, not the whole corpus.
-- My reason: the simplest and most important thing is to make sure whatever the bot cites is
-  actually one of the reports it was handed — a made-up citation is the dangerous failure, and I
-  can catch it with plain name-matching, no AI, so it runs on every answer. Fuller
-  sentence-by-sentence coverage isn't worth the fuzzy machinery until something shows I need it.
-- Revisit when: (matching) a surname-only [Silva], an odd separator [X and Y], or a non-name
-  bracket gets mis-flagged fabricated -> extend the splitter/matcher. `# TUNABLE(full-name
-  normalized-exact match + comma/semicolon split for plural brackets; symptom above.)` (scope) ->
-  add B's per-sentence coverage when the Phase-4 gate needs "every claim traceable" OR runs show
-  grounded-but-uncited answers (valid citations but sparse).
-- Steelman (B, logged once): coverage is what makes citations USEFUL, not merely non-fabricated —
-  an answer that cites nothing scores zero-fabricated yet zero-traceable, and only graded coverage
-  catches a wall of grounded-but-uncited claims. If Phase-4's gate becomes "every claim
-  traceable," coverage is its real input and Phase-4 reopens this parser.
-- cite:-prefix fix (2026-07-26, surfaced at the 1d baseline). The generator sometimes copies the
-  corpus's own bracket forms — [cite: Ed Fahey], [Ed Fahey, Section 5] — instead of the contract's
-  [Ed Fahey], which the parser mis-flagged as FABRICATED (baseline fabricated-rate 0.061 = sh-008 +
-  mh-005, both citing VALID retrieved names). Fix in `_citation_names`: strip a leading "cite:"
-  prefix, drop bare-numeric ([cite: N]) and "Section N" brackets — all non-doc-citations; a REAL
-  fabrication (a name not in the retrieved set) still surfaces. Offline re-parse of the baseline:
-  0.061 → 0.000 (zero real fabrication). The baseline summary.json keeps 0.061 (write-once, D-021);
-  the corrected 0.000 is verified via re-parse and every future run uses the fixed parser.
+**Decision.** Single-provider (Anthropic) for the baseline. A cross-provider judge
+is pre-registered as the response *if* calibration shows family bias — not adopted
+blind.
 
-## D-021: Repro-hole closure (Tier-1 item 8; last instrument item before 1b)
-- Date: 2026-07-25
-- Context: runs are write-once and used as a comparison ledger, but four things a run's
-  reproducibility depends on were unpinned in config.json — a run could differ from another with
-  no config diff to explain it. Three are mechanical (no real alternative); the fourth (dirty-tree
-  handling) is the one genuine fork.
-- Mechanical closures (no D-fork; recorded for the audit trail):
-  - `question_set.sha256` — `n` is a WEAK fingerprint: a gold quote can be edited (changing which
-    gold is scored) without changing the row count, so two runs silently score different gold under
-    a same-looking config. Hash the raw bytes; any edit -> different hash -> visible in a diff.
-  - `normalizer.version` (`NORMALIZER_VERSION="norm-v1"` in normalize.py) — the config named the
-    normalizer as a PATH STRING that never changes when the function body does; changing the body
-    silently re-scores all hit-rate history (the module's own warning). Hand-bumped version,
-    snapshotted like RUBRIC_VERSION / PROMPT_CONTRACT_VERSION, makes the change a config diff.
-  - `embed_stack` (torch / sentence-transformers / numpy versions) — these determine the
-    EMBEDDINGS but are INVISIBLE to the cache key (model_id + role + sha256(text), the torch
-    caveat). Read via importlib.metadata (package metadata, NOT `import torch`) so a fully-cached
-    offline run still never loads torch (preserves the D-015 cache payoff). HONESTY LIMIT recorded
-    in-code: this is the version INSTALLED NOW; for a cache-HIT run it is not necessarily the
-    version that produced the cached vector. Recording makes a mismatch AUDITABLE; it does not FIX
-    the cache-key blindness (that fix = folding the stack version into the cache key, deferred —
-    no signature has fired).
-- The one fork — dirty-tree handling (config already records `git.dirty`):
-  - Options: (a) record-only (status quo — silent flag, no nudge); (b) WARN, don't block (loud
-    banner at launch, run proceeds); (c) ENFORCE (hard-block unless `--allow-dirty`).
-  - Decision: (b) warn, don't block. `warn_if_dirty()` prints a banner at launch; nothing is
-    blocked; `git.dirty` remains the permanent audit trail.
-- My reason: I do throwaway offline retrieval runs constantly and they vastly outnumber
-  baseline-of-record runs; a hard block would tax the tight synchronous feedback loop that is the
-  harness's whole point, and `--allow-dirty` would become reflex muscle-memory anyway — so enforce
-  pays friction daily and still erodes to a warning. The banner nudges at the one moment that
-  matters (cutting a baseline) while the recorded flag makes any dirty baseline auditable after.
-- Revisit when: a dirty-tree baseline-of-record slips through and pollutes a comparison despite the
-  banner -> promote to ENFORCE for comparison-grade runs (keep offline iteration unblocked, e.g.
-  gate only when the API lanes run). `# TUNABLE(warn-not-enforce; symptom: a dirty baseline gets
-  compared anyway.)`
-- Steelman (enforce, logged once): item 8's whole job is closing repro holes STRUCTURALLY so they
-  don't depend on human vigilance — that is exactly why sha256 / version constants beat "remember
-  to check." A warning is itself a vigilance-dependent guard, and an accidental baseline from a
-  dirty tree is precisely the "SHA pins nothing" hole the roadmap flagged about the original run.
-  Only enforce makes the guarantee structural rather than behavioral. It loses solely because the
-  block would fire on every throwaway offline run too, where the friction/erosion cost is real.
+**Rationale.** Stay single-provider for the baseline: cheapest tier for the
+generator (Haiku), one tier up for the judge (Sonnet), so the ruler outranks what
+it grades. Escalate only on evidence, and note the two escalations are different
+axes: bump the *generator* tier if measured numbers show it underperforming (a
+cost/quality call); move the *judge* cross-family only if calibration shows
+same-family bias (an independence call). A second provider is a second key and a
+second drift surface — not worth buying for diversity's sake, and earns its cost
+only at the judge, once calibration data asks for it.
 
-## D-022: Judge calibration design (G-002 close; Phase 1e, Tier-2 items 9+10)
-- Date: 2026-07-27
-- Context: G-002 (GAPS) is the open "the ruler is uncalibrated" gap. Item 9 = human-vs-judge
-  agreement + a trip rule; item 10 = judge flip-rate (Sonnet-5 rejects temperature, so stability
-  must be MEASURED not asserted — D-010 temp-0 amendment). The BINDING data fact discovered at
-  design time: the 1d baseline (20260726T091259Z-2158c98) groundedness pool is **33 non-refusal
-  answers, ALL grounded=true, ZERO grounded=false**. The bot refuses instead of hallucinating
-  (the correct-iff-retrieved + closed-book=0.00 discipline from D-013), so the run STRUCTURALLY
-  cannot produce an ungrounded answer. The roadmap's pre-registered 8-grounded-true / 8-grounded-
-  false stratification is therefore IMPOSSIBLE from real data, and raw agreement on the natural
-  set is ~100% by construction (Cohen's kappa undefined — no variance in the human labels).
-- Three sub-decisions:
-  1. SAMPLE DESIGN (fork: natural-only / injected-only / hybrid). Decision: HYBRID. Label a
-     natural slice of the real run (the correctness lane HAS negatives — 14 false-refusals + the
-     one fluent-but-wrong mh-002 — plus a sample of grounded-true for the false-alarm direction),
-     AND author ~8 injected adversarial ungrounded answers (real question + real retrieved context
-     with a PLANTED unsupported claim) to stress-test the direction the run can't produce. The two
-     are reported as SEPARATE measurements, never pooled into one agreement number. Budget still
-     ~24 labels total (≈16 natural + ≈8 injected), redistributing the roadmap's 8/8/4/4 given the
-     skew: the 8 "grounded-false" become the injected set.
-  2. TRIP SEMANTICS (fork: fixed-% / kappa / asymmetric). Decision: ASYMMETRIC. On the injected
-     groundedness set, ZERO TOLERANCE — the judge passing even ONE injected-ungrounded answer as
-     grounded trips the alarm (→ bump RUBRIC_VERSION, re-score ALL runs, never mix, per D-010).
-     On the natural set, report-only disagreement, NO gate (a judge that wrongly FAILS a grounded
-     answer only makes the bot look worse than it is — the safe/pessimistic direction). Cohen's
-     kappa DEFERRED until ≥50 cumulative mixed labels exist (degenerate at n=33 all-true).
-  3. FLIP-RATE (item 10; mechanical, no real fork). Judge each item 3×; flip-rate = fraction
-     non-unanimous; if > ~5–10% switch official runs to majority-of-3. MEASURED ON the injected +
-     borderline items (multi-hop / mh-002), NOT the slam-dunk grounded-true answers — an obviously
-     grounded answer never makes the judge wobble, so measuring flips there gives a falsely
-     reassuring 0%.
-- My reason (owner):
-  - Sample: we should test the false refusals (that's the correctness lane) and — more importantly
-    — the ungrounded case, but every answer is currently grounded, so we inject false facts and see
-    whether the judge marks them ungrounded. (Not a parrot of the tradeoff text: owner re-derived
-    the hybrid unprompted from "we have no wrong answers to stress-test on.")
-  - Trip: zero tolerance on an ungrounded answer being judged grounded, because a CEO getting wrong
-    info about another CEO is the failure we least tolerate and the whole reason for the check. The
-    judge wrongly failing a grounded answer is annoying but safe; wrong refusals matter too but that
-    is the APP's behavior (a retrieval track, Phase 2/3), NOT the ruler — 1e can't fix it and the
-    false_refusal_rate is measured deterministically, judge-independent.
-  - Flip: we can't control temperature, so run it a few times and check it behaves the same; if it
-    drifts, take best-of-3 — and run it on the hard cases (injected/almost-right), because the
-    obviously-correct ones the judge will always get right and won't wobble on.
-- Revisit when: (trip) an injected-ungrounded answer is judged grounded → the ruler is unreliable
-  in the dangerous direction; bump the rubric and re-score. (kappa) ≥50 cumulative mixed labels
-  accumulate → switch the natural-set stat from raw agreement to kappa. (flip) flip-rate > ~5–10%
-  → majority-of-3 becomes the official aggregation for comparison runs.
-- TUNABLEs (values proposed at design; symptoms recorded):
-  `# TUNABLE(~8 injected = 2 each across {off-by-a-number, unsupported-inference, wrong-attribution,
-  outside-knowledge} + 1 blatant-fabrication control; grow a KIND only if the judge misses it or a
-  suspected kind is untested. Symptom too-small: judge catches all 8 yet you distrust an unrepresented
-  failure shape.)`
-  `# TUNABLE(flip: 3 runs, majority-of-3 above ~5–10% non-unanimous; symptom wrong: A/B groundedness
-  deltas you act on are SMALLER than the measured flip-rate ⇒ the ruler's wobble dominates the signal.)`
-- Injection taxonomy grounded in REAL generator behavior (2026-07-27, owner drilled "do these lie-types
-  even happen?"). Read all 33 non-refusal answers from the 1d baseline before authoring. Findings that
-  RESHAPED the set: (a) the generator is fact-dense and number-heavy ("76.65%", "$1.7B", "20,000 hectares")
-  → off-by-a-number is the MOST realistic plant, promoted to primary + unambiguous trip item; (b) it does
-  NOT manufacture superlatives — the only superlatives in all 33 are ones it RELAYS in quotes from the
-  report (sh-013 "world's largest LED supplier"; sh-022 "Australia's largest carbon sink"), so the
-  "unsupported inference / most experienced" plant owner was skeptical of is NOT something this generator
-  does → DEMOTED from a trip item to a borderline (gray-zone, report-only) item. Owner's skepticism was
-  correct and improved the design. (c) realistic drift homes = multi-doc answers (sh-001 blends two
-  people's revenue ranges → wrong-attribution plant) and the occasional added context sentence (sh-024
-  "staple in the BMW track community" → elaboration-drift plant). The gray-zone items never trip because
-  you cannot zero-tolerance-fail the judge on a case where careful humans themselves disagree.
-- EXECUTED 2026-07-27 (calibration/20260726T091259Z-2158c98/report.json). Judge d010-v1 PASSES; the
-  alarm did NOT trip. Results:
-  - Trip test: judge marked all 6 confirmed-ungrounded plants (off-by-a-number x2, outside-knowledge
-    x2, wrong-attribution, blatant) grounded=false → 0 misses → no trip. The ruler catches the
-    dangerous direction the run itself never produced.
-  - Natural false-alarm: 8/8 (100%) human/judge agreement — the judge never wrongly failed a
-    genuinely-grounded answer, including the two relayed-superlative cases (sh-013/sh-024) it correctly
-    kept grounded. So it is strict without being trigger-happy.
-  - Gray zone (the interesting finding, STANDS): on BOTH borderline plants the owner INDEPENDENTLY
-    labeled ungrounded — the SAME as the judge. Owner and judge share the strict "supported by the
-    reports ALONE" bar; the predicted disagreement did not appear. NEAR-MISS on protocol: the assistant
-    verbally leaked the judge's aggregate outcome (both gray-zone judged ungrounded + set composition)
-    AFTER `judge-injected` but the owner confirms they had already finished labeling and only saw the
-    message on scroll-back afterward — so the labels were genuinely blind and the result holds. HONEST
-    CAVEAT (unchanged): n=1 labeler, so this shows owner and THIS judge share the line, not that the
-    line is objectively right. The class stays gray in principle; report-only, never trips.
-  - BLIND-PROTOCOL fix (from the near-miss, encoded in eval/calibrate.py): label FIRST; `judge-injected`
-    now prints no verdicts/ids/kinds (only a progress counter); nobody narrates the judge's outcome or
-    the set composition before labeling. The leak was verbal, not in the artifacts — but had the owner
-    scrolled up mid-label it would have anchored them, so the rule + silenced tool prevent recurrence on
-    the next rubric bump.
-  - Flip-rate: 0% non-unanimous over 9 hard items x 3 runs → single-call judge is stable enough; NO
-    majority-of-3 needed at d010-v1 (item 10 closed; re-measure on any rubric bump). MEASURED
-    replacement for the unsettable temp-0 (D-010 amendment).
-  - Correctness lane (labeled 2026-07-27): 7/8 (88%) human/judge agreement. The SOLE disagreement is
-    mh-002 (owner=correct, judge=incorrect) — the genuinely ambiguous multi-hop case: the bot named the
-    right person (Jay Roberts = healthcare) but ONLY because retrieval fetched Jay and missed Hardev
-    Grewal, so it never actually performed the comparison (it abstained on Hardev). Outcome-correct vs
-    process-correct. This is the textbook reason correctness is SECONDARY: the REAL failure is a
-    retrieval miss, already caught load-bearingly by hit@1=false / span-recall@3=0.5, while grounded=true
-    is also right (the bot didn't lie, it was honest about the missing report). The disagreement is KEPT
-    (not flipped to force 8/8) as the more honest artifact; it is report-only, no action. That the lone
-    split lands on the one ambiguous item is itself a calibration positive — the judge doesn't diverge on
-    clear cases.
-  Net: G-002 RESOLVED for rubric d010-v1 — the primary-metric ruler is calibrated in both directions
-  and stable; the asymmetric trip rule is now armed for every future RUBRIC_VERSION bump.
-- Steelman (natural-only, the option passed on, logged once): an injected bad answer is BLATANT and
-  real drift is SUBTLE — if the judge catches an obvious plant that proves nothing about whether it
-  catches the plausible-number-slightly-off that actually happens in the wild, so injection can buy
-  FALSE confidence, and the natural 33 (judge didn't false-alarm on genuinely-grounded answers) is a
-  real result in the direction the data actually went. This loses only because a guardrail never
-  tested in the failure direction can't be claimed to work at all (the dead-battery smoke detector);
-  the steelman survives as a DESIGN CONSTRAINT — the plants must be realistic (subtle number/inference/
-  attribution errors), not cartoonish, or the stress-test is theater.
+**Alternative considered (cross-provider judge).** Judge independence is the one
+axis where provider diversity is a real quality gain: a cross-family judge cannot
+share the generator's blind spots by construction. The only reason to defer is that
+calibration has not yet shown same-family judging to be measurably biased here.
+
+**Revisit when.** The judge-calibration sample shows the Sonnet judge systematically
+over-rating same-family (Claude) outputs versus the blind human labels → move the
+*judge* cross-family (the generator can stay Claude; it is the ruler that must be
+independent). Also revisit on a provider outage or model deprecation that forces a
+swap.
+
+---
+
+## D-018: Ranking-record depth
+
+**Context.** `store.search` discards everything past `LIMIT k`, and `results.jsonl`
+kept only the top-3. But the exact seqscan already ranks all 268 chunks (D-014), so
+gold-rank, MRR, and a near/deep-miss taxonomy are *free* to record and impossible to
+backfill into write-once runs. hit@1 stays the only headline; ranks are the
+zero-cost diagnostic that routes the next build (a miss at rank 2–5 is a ranking
+problem → rerank/bump-k; a miss at rank 40+ is a representation problem → re-chunk).
+
+**Options.**
+- (a) gold-rank-only via a per-gold count query. Cheapest, exact rank + MRR, but records nothing about *who* outranked the gold.
+- (b) top-N (doc_id + score). Near-miss neighborhood + gold-rank if gold ≤ N; a deep gold (rank 67) records only as ">N", losing the exact rank; adds a silent N.
+- (c) full 268-row ranking (doc_id + score, no text). Exact gold rank always, full MRR, complete taxonomy, re-analysable forever; ~10 KB/question (~450 KB/run).
+
+**Decision.** (c) full-ranking now, doc_id + score only (no text — the gold-quote
+match already ran offline). Pre-registered migration to (b) threshold-N once the
+chunking strategy is frozen.
+
+**Rationale.** While chunking is still unsettled, a miss must be classifiable as a
+near-miss (ranking fix) or way off (re-chunk), so everything is ranked — reasonable
+even on a few hundred documents at company scale. Once chunking is settled a
+threshold N suffices, and starting with (c) is what *gives* the gold-rank
+distribution to set that N empirically instead of guessing.
+
+**Threshold-N derivation (applied at migration).** Set N from the observed
+gold-rank distribution of the *frozen* config, not a priori: N = max( near-miss-band
+tail [~95th pct of gold-rank among questions a reranker could still rescue],
+distractor-head [top ~5–10, to see who outranked the gold] ) — both modest, ~15–20
+here. Past N collapses to one "deep-miss / representation" bucket because the action
+(re-chunk) is identical for rank 40 vs 200. `# TUNABLE(N read off the frozen-config
+gold-rank curve; re-measure when the embedder or chunk scheme changes. Symptom
+too-small: a non-trivial fraction of gold lands in ">N" and you keep needing the
+exact deep rank.)`
+
+**MRR note.** MRR is single-gold-natural; multi-hop records each gold document's
+rank and feeds min-rank (best-placed gold) as the MRR input, so the metric survives
+re-chunking (a document's rank = best rank among its chunks).
+
+**Revisit when.** Chunking + embedder frozen → cut full-ranking to threshold-N; or
+the corpus grows past ~10⁴ where per-question full-ranking artifacts bloat and
+option (a)'s targeted count becomes the scalable path (premature at 268).
+
+---
+
+## D-019: Refusal label — deterministic string vs judge
+
+**Context.** `is_refusal` does double duty — it scores both abstention lanes
+(abstention_accuracy, false_refusal_rate) *and* filters the primary groundedness
+denominator (only non-refusals are graded for grounding). It shipped as the judge's
+semantic boolean: a drift-prone model sitting inside the primary metric. But the
+generation contract already mandates an *exact* refusal sentence ("I don't know
+based on the provided reports."), so a deterministic detector is available for free.
+Whether the generator actually emits the exact string was unmeasured before the
+first online run.
+
+**Options.**
+- Judge-only (status quo). Catches hedged/off-script refusals, but a model boolean drives the primary denominator and can drift; a judge false-"refusal" would wrongly exclude a possible hallucination from groundedness (the reputational-risk direction).
+- String-only. Deterministic normalized-equality match against the mandated sentence. Drift-proof, contamination-proof, and cannot wrongly pull a real answer out of the denominator; but a refusal in the bot's own words scores as a non-refusal (undercounts abstention if the bot goes off-script).
+- Both (chosen). String-authoritative + judge cross-check + divergence log.
+
+**Decision.** Record both. `refusal_exact` (normalized equality, reusing the D-011
+normalizer) is the official label for abstention and the groundedness filter; the
+judge's `is_refusal` is kept as a recorded cross-check; disagreements are counted
+(`judge_divergence_n/rate/divergent_ids`) as an alarm that the bot went off-script.
+`REFUSAL_STRING` is a named constant in `generate.py` so the detector and the prompt
+cannot drift. No extra API call — both labels come from data already collected.
+
+**Rationale.** Start with the simplest thing that still measures — a plain string
+check on the exact sentence the bot is told to use — keep a drifty model out of the
+primary metric, then graduate to the judge's semantic label only if the divergence
+log shows the bot won't obey "reply exactly." Whether it goes off-script is unknown
+up front; the divergence count is what will tell.
+
+**Alternative considered (judge-authoritative).** For abstention questions
+specifically, a refusal in the bot's own words is genuinely correct behavior, and
+string-only scores it as a non-refusal — so if the bot hedges often, the judge
+measures the metric that matters most (did it correctly decline?) more faithfully.
+The judge wins the moment the divergence log shows the bot won't obey the
+exact-string contract.
+
+**Revisit when.** The first online run shows material divergence *and* inspection
+confirms the divergent cases are genuine off-script refusals (not judge errors) →
+either tighten the contract or promote the judge to official. `# TUNABLE(equality
+not containment; symptom wrong: divergence fills with genuine refusals that merely
+appended a citation/token → loosen to containment.)`
+
+---
+
+## D-020: Citation instrument — validity-only vs coverage
+
+**Context.** The generation contract mandates a document-level `[doc_id]` tag after
+every claim, but the harness never read them — D-009's own "an unverified citation
+launders hallucinations" was unenforced. A `doc_id` equals the subject's full name,
+and the citation form is `[Full Name]`, so a cited tag matches a retrieved `doc_id`
+by name with no resolution layer needed.
+
+**Options.**
+- A (validity + counts). Deterministic parse: extract `[…]` tags, split plural brackets, normalize, classify each as valid (name is in the *retrieved* set for this question) or fabricated. Record counts + `has_fabricated` + `has_any_citation`. No API. Catches the two real failures — a fabricated citation (cited a document it was never shown, the laundering signal and a contamination tell) and a zero-citation answer. Blind to graded per-sentence coverage.
+- B (A + coverage). Also split the answer into sentences and score the fraction of *factual* sentences carrying a tag. Adds a sentence-splitter tunable and a fuzzy "what is a factual sentence" denominator (a mini-judge problem).
+- C (B + support). Judge that the cited document actually *contains* the claim. Rejected — that is the groundedness judge's job (D-010), duplicated per-citation and expensive.
+
+**Decision.** A. A deterministic per-answer citation parser (`parse_citations`): a
+`citations` block per answer plus a `citations` summary section
+(`fabricated_citation_rate`, `zero_citation_rate`, mean citations/answer) measured
+over non-refusal answers. Validity is checked against the retrieved set for that
+question, not the whole corpus.
+
+**Rationale.** The simplest and most important guarantee is that whatever the bot
+cites is actually one of the reports it was handed — a fabricated citation is the
+dangerous failure, catchable with plain name-matching and no AI, so it runs on every
+answer. Fuller sentence-by-sentence coverage is not worth the fuzzy machinery until
+something shows it is needed.
+
+**Alternative considered (B).** Coverage is what makes citations *useful*, not
+merely non-fabricated — an answer that cites nothing scores zero-fabricated yet
+zero-traceable, and only graded coverage catches a wall of grounded-but-uncited
+claims. If a later gate becomes "every claim traceable," coverage is its real input
+and this parser reopens.
+
+**Revisit when.** (Matching) a surname-only tag, an odd separator, or a non-name
+bracket gets mis-flagged fabricated → extend the splitter/matcher. `# TUNABLE(full-
+name normalized-exact match + comma/semicolon split for plural brackets.)` (Scope)
+add B's per-sentence coverage when a later gate needs "every claim traceable" or
+runs show grounded-but-uncited answers.
+
+**Later refinement — the `cite:`-prefix fix.** The generator sometimes copies the
+corpus's own bracket forms — `[cite: Name]`, `[Name, Section 5]` — instead of the
+contract's `[Name]`, which the parser mis-flagged as fabricated (baseline
+fabricated-rate 0.061, from two answers both citing *valid* retrieved names). Fix in
+`_citation_names`: strip a leading `cite:` prefix and drop bare-numeric
+(`[cite: N]`) and `Section N` brackets — all non-doc citations; a real fabrication
+(a name not in the retrieved set) still surfaces. Offline re-parse of the baseline:
+0.061 → 0.000 (zero real fabrication). The baseline `summary.json` keeps 0.061
+(write-once, D-021); the corrected 0.000 is verified via re-parse, and every future
+run uses the fixed parser.
+
+---
+
+## D-021: Reproducibility-hole closure
+
+**Context.** Runs are write-once and used as a comparison ledger, but four things a
+run's reproducibility depends on were unpinned in `config.json` — a run could differ
+from another with no config diff to explain it. Three are mechanical; the fourth
+(dirty-tree handling) is the one genuine fork.
+
+**Mechanical closures (no alternatives; recorded for the audit trail).**
+- `question_set.sha256`. `n` is a weak fingerprint: a gold quote can be edited (changing which gold is scored) without changing the row count, so two runs could silently score different gold under a same-looking config. Hash the raw bytes; any edit → different hash → visible in a diff.
+- `normalizer.version` (`NORMALIZER_VERSION="norm-v1"`). The config named the normalizer as a path string that never changed when the function body did; changing the body silently re-scored all hit-rate history. A hand-bumped version, snapshotted like the rubric and prompt versions, makes the change a config diff.
+- `embed_stack` (torch / sentence-transformers / numpy versions). These determine the embeddings but are invisible to the cache key (`model_id + role + sha256(text)`). Read via `importlib.metadata` (package metadata, not `import torch`) so a fully-cached offline run still never loads torch (preserving the D-015 cache payoff). Honesty limit recorded in-code: this is the version *installed now*; for a cache-hit run it is not necessarily the version that produced the cached vector. Recording makes a mismatch auditable; it does not fix the cache-key blindness (that fix — folding the stack version into the cache key — is deferred, no signature having fired).
+
+**The one fork — dirty-tree handling** (config already records `git.dirty`).
+- Options: (a) record-only (silent flag, no nudge); (b) warn, don't block (loud banner at launch, run proceeds); (c) enforce (hard-block unless `--allow-dirty`).
+- Decision: (b) warn, don't block. `warn_if_dirty()` prints a banner at launch; nothing is blocked; `git.dirty` remains the permanent audit trail.
+
+**Rationale.** Throwaway offline retrieval runs happen constantly and vastly
+outnumber baseline-of-record runs; a hard block would tax the tight synchronous
+feedback loop that is the harness's whole point, and `--allow-dirty` would become
+reflex muscle-memory anyway — so enforce pays friction daily and still erodes to a
+warning. The banner nudges at the one moment that matters (cutting a baseline) while
+the recorded flag keeps any dirty baseline auditable after the fact.
+
+**Alternative considered (enforce).** Closing repro holes *structurally* so they
+don't depend on human vigilance is exactly why the sha256 and version constants beat
+"remember to check." A warning is itself a vigilance-dependent guard, and an
+accidental baseline from a dirty tree is precisely the hole the mechanical closures
+attack. Only enforce makes the guarantee structural rather than behavioral. It loses
+solely because the block would fire on every throwaway offline run, where the
+friction cost is real.
+
+**Revisit when.** A dirty-tree baseline-of-record slips through and pollutes a
+comparison despite the banner → promote to enforce for comparison-grade runs (keep
+offline iteration unblocked, e.g. gate only when the API lanes run). `# TUNABLE(warn-
+not-enforce; symptom: a dirty baseline gets compared anyway.)`
+
+---
+
+## D-022: Judge calibration design
+
+**Context.** The open question this closes is that the measurement ruler (the judge)
+was uncalibrated. Two pieces: human-vs-judge agreement with a trip rule, and a judge
+flip-rate (since the Sonnet judge rejects a set temperature, stability must be
+*measured*, not asserted — see D-010). The binding data fact discovered at design
+time: the baseline's groundedness pool is **33 non-refusal answers, all
+grounded=true, zero grounded=false**. The bot refuses instead of hallucinating (the
+correct-iff-retrieved + closed-book=0.00 discipline from D-013), so the run
+*structurally* cannot produce an ungrounded answer. A pre-registered
+8-grounded-true / 8-grounded-false stratification is therefore impossible from real
+data, and raw agreement on the natural set is ~100% by construction (Cohen's kappa
+undefined — no variance in the human labels).
+
+**Three sub-decisions.**
+1. *Sample design* (natural-only / injected-only / hybrid). **Hybrid.** Label a natural slice of the real run (the correctness lane *has* negatives — 14 false-refusals plus one fluent-but-wrong multi-hop case — plus a sample of grounded-true for the false-alarm direction), *and* author ~8 injected adversarial ungrounded answers (a real question + real retrieved context with a *planted* unsupported claim) to stress-test the direction the run can't produce. The two are reported as separate measurements, never pooled into one agreement number. Budget ~24 labels total (≈16 natural + ≈8 injected).
+2. *Trip semantics* (fixed-% / kappa / asymmetric). **Asymmetric.** On the injected groundedness set, zero tolerance — the judge passing even one injected-ungrounded answer as grounded trips the alarm (→ bump the rubric version, re-score all runs, never mix). On the natural set, report-only disagreement, no gate (a judge that wrongly *fails* a grounded answer only makes the bot look worse than it is — the safe/pessimistic direction). Cohen's kappa deferred until ≥50 cumulative mixed labels exist.
+3. *Flip-rate* (mechanical). Judge each item 3×; flip-rate = fraction non-unanimous; if > ~5–10%, switch official runs to majority-of-3. Measured on the injected + borderline items (multi-hop / the ambiguous case), *not* the slam-dunk grounded-true answers — an obviously grounded answer never makes the judge wobble, so measuring flips there gives a falsely reassuring 0%.
+
+**Rationale.**
+- *Sample.* Test the false refusals (the correctness lane) and — more importantly — the ungrounded case; but every answer is currently grounded, so inject false facts and see whether the judge marks them ungrounded.
+- *Trip.* Zero tolerance on an ungrounded answer being judged grounded, because wrong information about a subject is the failure least tolerated and the whole reason for the check. The judge wrongly failing a grounded answer is annoying but safe; wrong refusals matter too, but that is the *app's* behavior (a retrieval concern), not the ruler, and false_refusal_rate is measured deterministically and judge-independently.
+- *Flip.* Temperature is not controllable, so run it a few times and check for stability; if it drifts, take best-of-3 — and run it on the hard cases (injected / almost-right), because the obviously-correct ones the judge always gets right.
+
+**Injection taxonomy grounded in real generator behavior.** All 33 non-refusal
+baseline answers were read before authoring the plants. Findings that reshaped the
+set: (a) the generator is fact-dense and number-heavy (percentages, dollar figures,
+areas) → off-by-a-number is the most realistic plant, promoted to a primary,
+unambiguous trip item; (b) it does *not* manufacture superlatives — the only
+superlatives in all 33 are ones it *relays* in quotes from the report — so an
+"unsupported inference / most-experienced" plant was demoted from a trip item to a
+borderline (report-only) item; (c) realistic drift homes are multi-document answers
+(blending two subjects' figures → a wrong-attribution plant) and the occasional
+added context sentence (an elaboration-drift plant). Gray-zone items never trip,
+because the judge cannot be zero-tolerance-failed on a case where careful humans
+themselves disagree.
+
+**Result — the judge passes; the alarm did not trip.**
+- *Trip test:* the judge marked all 6 confirmed-ungrounded plants (off-by-a-number ×2, outside-knowledge ×2, wrong-attribution, blatant) grounded=false → 0 misses → no trip. The ruler catches the dangerous direction the run itself never produces.
+- *Natural false-alarm:* 8/8 (100%) human/judge agreement — the judge never wrongly failed a genuinely grounded answer, including the two relayed-superlative cases it correctly kept grounded. Strict without being trigger-happy.
+- *Gray zone:* on both borderline plants the human labeler independently labeled ungrounded — the same as the judge; the predicted disagreement did not appear. Honest caveat: n=1 labeler, so this shows the labeler and *this* judge share the line, not that the line is objectively right. The class stays gray in principle; report-only, never trips.
+- *Flip-rate:* 0% non-unanimous over 9 hard items × 3 runs → the single-call judge is stable enough; no majority-of-3 needed at this rubric version (re-measure on any rubric bump). This is the measured replacement for the unsettable temperature-0.
+- *Correctness lane:* 7/8 (88%) human/judge agreement. The sole disagreement is the genuinely ambiguous multi-hop case: the bot named the right person but only because retrieval fetched one subject and missed the other, so it never actually performed the comparison (it abstained on the missing subject). Outcome-correct vs process-correct — the textbook reason correctness is secondary: the real failure is a retrieval miss, already caught load-bearingly by hit@1=false / span-recall@3=0.5, while grounded=true is also right (the bot didn't lie, it was honest about the missing report). The disagreement is kept as the more honest artifact; report-only, no action. That the lone split lands on the one ambiguous item is itself a calibration positive.
+
+**Blind-labeling protocol** (encoded in `eval/calibrate.py`). Label *first*;
+`judge-injected` prints no verdicts, ids, or kinds (only a progress counter); the
+judge's outcome and the set composition are never narrated before labeling. Revealing
+verdicts or composition beforehand would anchor the labeler and contaminate the
+independence of the labels.
+
+Net: the ruler is calibrated in both directions and stable for this rubric version;
+the asymmetric trip rule is armed for every future rubric bump.
+
+**Revisit when.** (Trip) an injected-ungrounded answer is judged grounded → the
+ruler is unreliable in the dangerous direction; bump the rubric and re-score.
+(Kappa) ≥50 cumulative mixed labels accumulate → switch the natural-set statistic
+from raw agreement to kappa. (Flip) flip-rate > ~5–10% → majority-of-3 becomes the
+official aggregation for comparison runs.
+
+**Alternative considered (natural-only).** An injected bad answer is blatant and
+real drift is subtle — catching an obvious plant proves nothing about catching the
+plausible-number-slightly-off that happens in the wild, so injection can buy false
+confidence, and the natural 33 (no false alarms on genuinely grounded answers) is a
+real result in the direction the data went. This loses only because a guardrail
+never tested in the failure direction can't be claimed to work at all (the
+dead-battery smoke detector). The point survives as a design constraint: the plants
+must be realistic (subtle number/inference/attribution errors), not cartoonish, or
+the stress-test is theater.
+
+**TUNABLEs.**
+`# TUNABLE(~8 injected = 2 each across {off-by-a-number, unsupported-inference, wrong-attribution, outside-knowledge} + 1 blatant-fabrication control; grow a KIND only if the judge misses it or a suspected kind is untested. Symptom too-small: judge catches all 8 yet you distrust an unrepresented failure shape.)`
+`# TUNABLE(flip: 3 runs, majority-of-3 above ~5–10% non-unanimous; symptom wrong: A/B groundedness deltas you act on are SMALLER than the measured flip-rate ⇒ the ruler's wobble dominates the signal.)`

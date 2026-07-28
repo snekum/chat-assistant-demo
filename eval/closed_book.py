@@ -4,14 +4,14 @@ Runs the generator with EMPTY context on the ANSWERABLE questions and judges COR
 (there is no context, so groundedness is N/A). Needs the API but NOT the DB -- empty context
 means no retrieval.
 
-WHY (D-013): the subjects are real, semi-public people the generator may know from pretraining,
-so it could answer correctly WITHOUT retrieval -- inflating correctness and masking a broken RAG.
+WHY (D-013): corpus subjects may appear in the generator's pretraining data, so it could answer
+correctly WITHOUT retrieval -- inflating correctness and masking a broken RAG.
 Closed-book correctness = the share of correctness that is retrieval-INDEPENDENT (pure memory).
 open-book correctness (the baseline) minus closed-book = retrieval's actual lift. HIGH closed-book
-correctness => correctness is grading Haiku's memory of these people, not the RAG -> fire the
+correctness => correctness is grading the model's memory of the subjects, not the RAG -> fire the
 D-013 names-only anonymizer.
 
-OPTION A (owner's call 2026-07-26; not B): keep the f6 contract in force -- rule 1 "do not use
+OPTION A (chosen over B): keep the f6 contract in force -- rule 1 "do not use
 prior knowledge, even if you recognize the person" + rule 2 "refuse if the fact isn't in the
 reports". With EMPTY reports a contract-obeying bot refuses everything (correctness -> 0), and a
 contaminated bot answers from memory anyway (correctness > 0). This measures OPERATIONAL
