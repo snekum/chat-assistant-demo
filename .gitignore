@@ -27,6 +27,8 @@ runs/**/rankings.jsonl
 # --- Secrets ---
 .env
 .env.*
+# .env.example is the committed template (no secrets); un-ignore it from the .env.* rule above
+!.env.example
 *.key
 *.pem
 
