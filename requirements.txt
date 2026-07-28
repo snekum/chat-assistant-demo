@@ -1,0 +1,24 @@
+# Pinned to the versions this project was built and measured on (Python 3.14).
+# Regenerate with: ./.venv/Scripts/python.exe -m pip freeze
+#
+# NOTE on torch: 2.13.0 here is the CPU build (the embedder runs CPU-only on 268 short
+# docs). On Linux, `pip install torch==2.13.0` may pull a CUDA wheel; for a CPU-only box use
+#   pip install torch==2.13.0 --index-url https://download.pytorch.org/whl/cpu
+
+# --- Retrieval / storage ---
+numpy==2.5.1
+psycopg[binary]==3.3.4          # Postgres driver (psycopg 3)
+pgvector==0.5.0                 # vector type + register_vector
+
+# --- Embedder (local nomic-embed-text-v1.5, D-008/D-015) ---
+sentence-transformers==5.6.0
+torch==2.13.0
+transformers==5.14.1
+einops==0.8.2                   # required by nomic's trust_remote_code model
+
+# --- Generation + judge (D-009 / D-010) ---
+anthropic==0.117.0
+
+# --- Harness plumbing ---
+python-dotenv==1.2.2            # loads .env into os.environ (eval/run.py, judge, calibrate)
+tqdm==4.69.0                    # embed progress bar

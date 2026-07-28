@@ -1,0 +1,31 @@
+# Local Postgres + pgvector for the retrieval store (DECISIONS D-014).
+# The app creates the `vector` extension and the persons/chunks schema itself on first
+# connect (src/store.py: connect(init=True)) -- so no init SQL is needed here.
+#
+#   docker compose up -d          # start
+#   docker compose down           # stop (keeps data)
+#   docker compose down -v        # stop + wipe the volume (forces a re-ingest)
+#
+# DSN the app expects (src/store.py default): postgresql://postgres:postgres@localhost:5432/portfolio
+# Override via the PG_DSN env var if you change any of these.
+
+services:
+  db:
+    image: pgvector/pgvector:pg16
+    container_name: chat-assistant-pgvector
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: portfolio
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d portfolio"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  pgdata:
