@@ -31,11 +31,13 @@ baseline-of-record referenced by the current `runs/` — you will need it in Ste
 Do this BEFORE editing any docs. If it fails, report what's missing and stop — a phase isn't
 closed just because the code runs.
 
-- **DECISIONS.md:** every fork this phase decided has a row with (a) the options, (b) the
-  OWNER's reason grounded in this project (not a replay of the tradeoffs), (c) a revisit-when,
-  and (d) `# TUNABLE(...)` for every threshold/number introduced ("no silent numbers",
-  CLAUDE.md). Any fork the owner said "just build it" on must be logged `UNEXAMINED`. Missing a
-  row → ask the owner, don't author it.
+- **Decisions (working log):** every fork this phase decided has a full entry in the private
+  working decisions log (`notes/decisions-internal.md`) with (a) the options, (b) the OWNER's
+  reason grounded in this project (not a replay of the tradeoffs), (c) a revisit-when, and (d)
+  `# TUNABLE(...)` for every threshold/number introduced ("no silent numbers", CLAUDE.md). Any
+  fork the owner said "just build it" on must be logged `UNEXAMINED`. Missing an entry → ask the
+  owner, don't author it. (Decisions are authored here first; Step 3 publishes the sanitized
+  version.)
 - **GAPS.md:** every gap opened during this phase is either RESOLVED with a dated evidence
   pointer (a run id / calibration report / commit), or explicitly deferred with a PRE-REGISTERED
   trigger signature. Update any stale status rows to match reality. A gap that's silently still
@@ -66,7 +68,11 @@ is private") alone unless something structural changed.
 2. **Architecture sketch** — update only if the pipeline SHAPE changed this phase: chunk unit
    (Phase 2), + coordinator/router (Phase 3), + runtime gate (Phase 4), + serving/observability
    (Phase 5).
-3. **Decision-log index** — add one-liners for any new D-rows (D-023+) under the right group.
+3. **Publish new decisions + index them.** For each new decision in the private working log
+   (`notes/decisions-internal.md`), write a SANITIZED entry into the public `DECISIONS.md` ADR:
+   neutral engineering voice, strip internal-only cross-references and "owner"/interrogation
+   framing, replace any real names with synthetic placeholders, drop private-doc/gap-number refs
+   (keep the D-0xx id). Then add matching one-liners to the README decision-log index.
 4. **Status section** — state what's now done and what the next phase is, per ROADMAP.
 
 If the phase produced a finalize-last artifact that was previously blocked (dashboard
