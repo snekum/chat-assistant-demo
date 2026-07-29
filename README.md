@@ -30,8 +30,8 @@ infrastructure. Reproducing a full run end-to-end additionally requires the priv
 
 ```
 raw .md dossiers
-      │  ingest              whole-doc chunks (1 chunk / doc, baseline);
-      ▼                      person modeled as a first-class entity
+      │  ingest              whole-doc chunks (1 chunk / doc — retained after a
+      ▼                      measured chunking A/B, D-023); person = first-class entity
 persons.jsonl + chunks.jsonl
       │  embed               nomic-embed-text-v1.5, 768-d, local/CPU
       │                      disk cache keyed (model_id, role, sha256(text))
@@ -97,11 +97,16 @@ drifting model never sits inside the primary denominator.
 
 ## Key design decisions
 
-- **Whole-doc chunking as the baseline; section-aware chunking as the measured next step.** Each
-  dossier follows a fixed 15-section template. The baseline embeds one chunk per document to
-  establish a measurable floor; the known failure mode (a buried fact dilutes inside a ~2.8k-token
-  whole-doc embedding) is the motivation for the section-chunking A/B, run as a paired
-  before/after rather than assumed.
+- **Whole-doc chunking, retained after a measured section-chunking A/B (D-023).** Each dossier
+  follows a fixed ~15-section template, so the buried-fact hypothesis (a fact dilutes inside a
+  ~2.8k-token whole-doc embedding) was tested, not assumed: a three-arm paired A/B — whole-doc vs
+  section-aware vs a size-matched fixed window. The result **refuted the hypothesis for this
+  corpus**: whole-doc won or tied at every k (single-hop hit@1 0.63 vs section 0.46 vs fixed 0.37).
+  Because each dossier *fits* the embedder's window, whole-doc pools a name-rich representation that
+  finds the right person well, while chunking fragments it and strips name hooks. The measured payoff
+  of chunking is *person-scoped* retrieval (high person-findability, MRR 0.90) — a routing concern —
+  not global retrieval. Structure beat a blind fixed window at every k, so that control earned its
+  keep. The scheme-tagged store keeps every arm in place for a future re-test at scale.
 - **pgvector over a two-table schema (persons + chunks).** Keeping vectors and metadata in one
   store enables a native *pre-filter* — resolve a name to a person, then search only that
   person's chunks — which avoids the retrieve-then-filter failure mode of a separate vector index
@@ -189,6 +194,9 @@ gold-quote validator.
 
 The retrieval and evaluation core is complete: hardened metrics (Wilson intervals, rank/MRR
 diagnostics, per-stage cost/latency), a hand-authored and validated question set, a
-baseline-of-record, a closed-book contamination control, and a calibrated judge. Next up: a
-section-chunking A/B (measured before/after), then a multi-agent routing layer (name resolution +
-a web-freshness lane) and a production-monitoring simulation.
+baseline-of-record, a closed-book contamination control, and a calibrated judge. The
+section-chunking A/B is done — a three-arm paired comparison (whole-doc vs section-aware vs a
+size-matched fixed window) that **retained whole-doc on the evidence** and located chunking's real
+payoff in person-scoped retrieval (D-023). Next up: a multi-agent routing layer (name resolution +
+a web-freshness lane), where that person-scoped retrieval becomes load-bearing, then a
+production-monitoring simulation.
