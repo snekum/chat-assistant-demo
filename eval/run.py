@@ -55,6 +55,15 @@ RUNS_DIR = Path("runs")
 SEED = 42  # Default g; recorded, not load-bearing for this deterministic pipeline
 ANSWERABLE = {"single-hop", "multi-hop"}
 
+# Phase 2 (D-023): which chunk_scheme to retrieve from, and how many chunks to fetch/feed. Both
+# recorded in config.retrieval so a run is reproducible + a chunking diff is visible (D-021).
+SCHEME = os.environ.get("EVAL_SCHEME", "whole_doc")
+RETRIEVAL_K = int(os.environ.get("EVAL_K", str(DEFAULT_K)))  # >=3 so hit@3 stays valid
+# Cost re-scope (D-023): skip the ~$2.17 groundedness judge on EXPERIMENT runs -- it is the lane
+# we expect NOT to move under chunking. Generation + deterministic refusal/citation + correctness
+# still run (~$0.82). The frozen-config baseline-of-record runs the full judge.
+SKIP_GROUNDEDNESS = os.environ.get("SKIP_GROUNDEDNESS") == "1"
+
 
 def git_info() -> dict:
     def _run(args: list[str]) -> str | None:
@@ -232,8 +241,8 @@ def main() -> None:
     rankings: list[dict] = []  # sidecar: full 268-row ranking per question (D-018 option c)
     for r in rows:
         qvec = retriever.emb.embed_query(r["question"])
-        retrieved = store.search(retriever.conn, qvec, k=DEFAULT_K)  # top-k WITH text (hit@k + gen)
-        full_ranking = store.rank_all(retriever.conn, qvec)  # all rows, doc_id+score, no text
+        retrieved = store.search(retriever.conn, qvec, k=RETRIEVAL_K, scheme=SCHEME)  # top-k WITH text
+        full_ranking = store.rank_all(retriever.conn, qvec, scheme=SCHEME)  # all rows, doc_id+score
 
         rec: dict = {
             "id": r["id"],
@@ -280,18 +289,22 @@ def main() -> None:
         if api:
             answer, gen_meta = generator.answer(r["question"], retrieved)
             context = generate.format_context(retrieved)
-            g, g_meta = judge.groundedness(r["question"], context, answer)
+            if SKIP_GROUNDEDNESS:  # D-023 cost re-scope: skip the expensive judge on experiment runs
+                g, g_meta = {"is_refusal": None, "grounded": None, "reason": None}, None
+            else:
+                g, g_meta = judge.groundedness(r["question"], context, answer)
             c, c_meta = judge.correctness(r["question"], r["gold_answer"], answer)
             rec.update(
                 answer=answer,
-                is_refusal=g["is_refusal"],
+                is_refusal=g["is_refusal"],  # judge cross-check; None when groundedness skipped
                 refusal_exact=is_exact_refusal(answer),  # deterministic OFFICIAL label (D-019)
                 grounded=g["grounded"],
                 correct=c["correct"],
                 judge_reason={"groundedness": g["reason"], "correctness": c["reason"]},
             )
             rec["citations"] = parse_citations(answer, retrieved)  # deterministic [doc_id] check (D-020)
-            stages = {"generation": gen_meta, "groundedness": g_meta, "correctness": c_meta}
+            stages = {k: v for k, v in {"generation": gen_meta, "groundedness": g_meta,
+                                        "correctness": c_meta}.items() if v is not None}
             for m in stages.values():
                 m["cost_usd"] = cost.cost_usd(m)  # price the raw usage (item 4)
             rec["cost"] = {
@@ -325,8 +338,9 @@ def main() -> None:
                       "prompt_contract_version": generate.PROMPT_CONTRACT_VERSION},
         "judge": ({"id": __import__("judge").JUDGE_MODEL,
                    "rubric_version": __import__("judge").RUBRIC_VERSION} if api else None),
-        "retrieval": {"k": DEFAULT_K, "distance": "cosine",
-                      "index": "pgvector-exact (D-014)"},
+        "retrieval": {"k": RETRIEVAL_K, "distance": "cosine",
+                      "index": "pgvector-exact (D-014)",
+                      "chunk_scheme": SCHEME},  # D-023: which chunking arm this run retrieved from
         "seed": SEED,
         "normalizer": {"impl": "eval/normalize.py:normalize_for_match (D-011)",
                        "version": normalize.NORMALIZER_VERSION},  # snapshot like the rubric (item 8)
@@ -422,7 +436,9 @@ def summarize(rows: list[dict], results: list[dict], api: bool) -> dict:
         correctness["overall"] = binom(lambda x: x["correct"], results)  # old blended number, kept
         summary["correctness"] = correctness
         abst = [x for x in results if x["type"] == "abstention"]
-        labeled = [x for x in results if x["refusal_exact"] is not None]  # both labels exist (api)
+        # both labels must exist to compare (is_refusal is None when groundedness is skipped, D-023)
+        labeled = [x for x in results
+                   if x["refusal_exact"] is not None and x["is_refusal"] is not None]
         divergent = [x for x in labeled if x["refusal_exact"] != x["is_refusal"]]
         summary["abstention"] = {  # two-sided (Default l); label = deterministic refusal_exact (D-019)
             "abstention_accuracy": binom(lambda x: x["refusal_exact"], abst),
@@ -446,6 +462,8 @@ def summarize(rows: list[dict], results: list[dict], api: bool) -> dict:
         priced = [x["cost"] for x in results if x.get("cost")]  # per-stage tokens/$/latency (item 4)
         if priced:
             n = len(priced)
+            present = [st for st in ("generation", "groundedness", "correctness")
+                       if st in priced[0]["stages"]]  # groundedness absent when skipped (D-023)
             summary["cost"] = {
                 "prices_dated": cost.PRICES_DATED,
                 "total_usd": round(sum(c["total_usd"] for c in priced), 4),
@@ -457,7 +475,7 @@ def summarize(rows: list[dict], results: list[dict], api: bool) -> dict:
                         "total_usd": round(sum(c["stages"][st]["cost_usd"] or 0 for c in priced), 4),
                         "mean_latency_s": round(sum(c["stages"][st]["latency_s"] for c in priced) / n, 3),
                     }
-                    for st in ("generation", "groundedness", "correctness")
+                    for st in present
                 },
             }
     return summary
@@ -511,9 +529,9 @@ def report(run_id: str, out_dir: Path, summary: dict, api: bool) -> None:
         if summary.get("cost"):
             cst = summary["cost"]
             by = cst["by_stage"]
+            per_stage = " / ".join(f"{st[:6]} ${by[st]['total_usd']:.4f}" for st in by)  # only stages present
             print(f"cost: ${cst['total_usd']:.4f} total, ${cst['mean_usd_per_question']:.4f}/question "
-                  f"(gen ${by['generation']['total_usd']:.4f} / ground ${by['groundedness']['total_usd']:.4f} "
-                  f"/ correct ${by['correctness']['total_usd']:.4f}; prices {cst['prices_dated']})")
+                  f"({per_stage}; prices {cst['prices_dated']})")
     else:
         print("groundedness / correctness / abstention: SKIPPED (no ANTHROPIC_API_KEY).")
 

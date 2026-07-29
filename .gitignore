@@ -23,6 +23,9 @@ eval/review_queue.jsonl
 runs/**/results.jsonl
 # rankings.jsonl lists ALL 268 doc_ids (real names) per question -- same leak as persons.jsonl.
 runs/**/rankings.jsonl
+# analysis/ = offline diagnostic artifacts (e.g. sweep_*.json); per_question.top_docs lists real
+# names, same leak as rankings.jsonl. Local-only, like the runs diagnostics.
+analysis/
 
 # --- Internal working docs: the private engineering/judgment ledger. ---
 # Kept on disk (they govern how the project is built) but not part of the public repo face.
