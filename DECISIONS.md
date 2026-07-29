@@ -662,3 +662,85 @@ the stress-test is theater.
 **TUNABLEs.**
 `# TUNABLE(~8 injected = 2 each across {off-by-a-number, unsupported-inference, wrong-attribution, outside-knowledge} + 1 blatant-fabrication control; grow a KIND only if the judge misses it or a suspected kind is untested. Symptom too-small: judge catches all 8 yet you distrust an unrepresented failure shape.)`
 `# TUNABLE(flip: 3 runs, majority-of-3 above ~5–10% non-unanimous; symptom wrong: A/B groundedness deltas you act on are SMALLER than the measured flip-rate ⇒ the ruler's wobble dominates the signal.)`
+
+---
+
+## D-023: Section-chunking A/B — measured, whole-doc retained
+
+**Context.** The whole-doc baseline (D-008: one chunk per document) showed a handful
+of single-hop misses where the correct dossier ranked deep (rank 40–60) — the
+hypothesised "a buried fact dilutes inside a ~2.8k-token whole-doc embedding" failure.
+Section-aware chunking was run as a paired A/B to test whether splitting on the
+template's declared section boundaries rescues those buried facts, rather than assuming
+it would. Each dossier follows a fixed ~15-section template; a census confirmed 252/268
+use one heading level and 16 use another (so the splitter keys `^#{2,3} \d+\.`, not a
+single level — otherwise 16 documents stay whole *inside* the section arm and dilute the
+comparison), with section counts in {12, 15, 16}.
+
+**Forks and decisions.**
+- *Chunk unit:* pure sections (one chunk per heading), over min-length merge or
+  small-to-big. Rationale: the dumbest unit that measures the hypothesis; let the failure
+  signature pull complexity (context loss → contextual headers; tiny weak chunks →
+  min-length merge) rather than pre-solving. Each section keeps its own native heading
+  line verbatim (document text, not a synthetic header), so span-matching (D-011) is
+  untouched; the splitter partitions the body losslessly so no gold quote can fall in a gap.
+- *Retrieval k:* sweep k ∈ {1,3,5,8} offline (free — retrieval is a similarity search, no
+  generation), read the effect at *matched* k so "structure helped" is separated from "we
+  fetched more chunks," and pick any generation-run k from the curve.
+- *Control arm:* a size-matched fixed-window splitter (window = the measured section-chunk
+  mean, ~268 tokens; no overlap), not the conventional 512, so the comparison isolates
+  boundary *placement* (structure vs a blind ruler) from chunk *size*.
+- *Storage:* a `chunk_scheme` column (composite primary key) so all arms coexist in one
+  store and retrieval filters by scheme — a chunking change is a config diff, and future
+  schemes (contextual headers, re-embeds) are a filter away, not a rebuild. Every query
+  filters by scheme, so a forgotten filter returns one defined scheme, never a blend.
+- *Cost:* on this experiment run, defer the expensive groundedness judge — it is the lane
+  with a principled reason not to move under chunking; generation plus the deterministic
+  refusal/citation checks plus the cheap correctness judge suffice to catch the real risk
+  (context-loss false-refusals). The frozen-config baseline runs the full judge.
+
+**Result (offline retrieval sweep, single-hop n=41).** Whole-doc wins or ties at every k;
+chunking did not improve retrieval on this corpus.
+
+| scheme | hit@1 | hit@3 | hit@5 | hit@8 | MRR |
+|---|---|---|---|---|---|
+| whole-doc | 0.63 | 0.71 | 0.83 | 0.85 | 0.71 |
+| section | 0.46 | 0.68 | 0.73 | 0.76 | 0.90 |
+| fixed (size-matched) | 0.37 | 0.54 | 0.63 | 0.71 | 0.93 |
+
+Paired McNemar tests are all underpowered at n=41 (whole vs section hit@1: +0.17,
+discordant 13 vs 6, p=0.17; hit@3: a dead tie, 7 vs 8, p=1.0; section vs fixed hit@3:
++0.15 for structure, 10 vs 4, p=0.18). None reach significance — but the decision is safe
+regardless, because whole-doc is never *beaten*. The gold set is not grown to resolve the
+deltas: a set is grown to confirm a challenger worth adopting, and none led.
+
+**Why whole-doc won (mechanism, verified in data).** Two parts. (1) Under chunking,
+"find the person" and "find the fact" split apart: MRR rose to 0.90 (the right person's
+best chunk almost always ranks near the top) while hit@1 fell to 0.46 (the *specific*
+quote-bearing section often does not). Under whole-doc these cannot diverge — document and
+fact are one unit, and `gold_rank==1` matched hit@1 on 41/41. (2) The deeper reason: each
+dossier (~2.8k tokens) fits the embedder's 8k window, so whole-doc pools a name-rich
+representation that finds the right person well; chunking fragments that for no fit-gain,
+strips name hooks from name-poor sections, and multiplies distractor chunks ~15×. Chunking
+earns its cost when documents *exceed* the window or when a corpus is large enough that
+averaged whole-doc centroids crowd together; at 268 short, fitting documents it can only
+trade (it rescued a few buried facts and broke a few name-poor ones — a wash), not win.
+The one clear positive — high person-findability — is the signal that *person-scoped*
+retrieval (resolve a name, then search within that person's chunks) is where chunking's
+value lives, which is a later routing concern, not global retrieval. Structure beat the
+blind ruler directionally at every k (and the no-overlap fixed arm severed one gold span
+outright), so the control did its job.
+
+**Alternative considered (adopt section chunking anyway).** Section chunking's higher MRR
+and its rescue of several deep-ranked facts are real, and at a larger corpus the averaging
+argument flips in its favour. It loses *now* because on this corpus the measured single-hop
+retrieval is no better (and trends worse), and the win it does show is person-scoped, which
+a routing layer captures without paying the global-retrieval penalty. The infrastructure to
+revisit it (the scheme column, both embedded arms) is kept in place.
+
+**Revisit when.** Documents grow past the embedder window, or the corpus grows large enough
+that whole-doc centroids stop discriminating (hit@1 degrades with corpus size) → re-run the
+A/B, and pair section chunking with contextual headers to fix the name-poor-section failure
+this phase surfaced. `# TUNABLE(pure sections, no synthetic header, fixed window = measured
+section mean; symptom to flip: single-hop hit@k under a chunked scheme overtakes whole-doc,
+or the per-question discordant analysis shows a chunked scheme rescuing more than it breaks.)`
