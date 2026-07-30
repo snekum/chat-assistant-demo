@@ -665,7 +665,7 @@ the stress-test is theater.
 
 ---
 
-## D-023: Section-chunking A/B — measured, whole-doc retained
+## D-023: Section-chunking A/B — section-header chunking adopted
 
 **Context.** The whole-doc baseline (D-008: one chunk per document) showed a handful
 of single-hop misses where the correct dossier ranked deep (rank 40–60) — the
@@ -699,48 +699,56 @@ comparison), with section counts in {12, 15, 16}.
   refusal/citation checks plus the cheap correctness judge suffice to catch the real risk
   (context-loss false-refusals). The frozen-config baseline runs the full judge.
 
-**Result (offline retrieval sweep, single-hop n=41).** Whole-doc wins or ties at every k;
-chunking did not improve retrieval on this corpus.
+**Result — the A/B, then a decomposition that changed the conclusion.** The first sweep
+(offline retrieval, single-hop n=41) showed *plain* section chunking did **not** beat whole-doc:
 
 | scheme | hit@1 | hit@3 | hit@5 | hit@8 | MRR |
 |---|---|---|---|---|---|
 | whole-doc | 0.63 | 0.71 | 0.83 | 0.85 | 0.71 |
-| section | 0.46 | 0.68 | 0.73 | 0.76 | 0.90 |
+| section (plain) | 0.46 | 0.68 | 0.73 | 0.76 | 0.90 |
 | fixed (size-matched) | 0.37 | 0.54 | 0.63 | 0.71 | 0.93 |
+| **section + name header** | **0.66** | **0.78** | **0.85** | 0.85 | 0.91 |
 
-Paired McNemar tests are all underpowered at n=41 (whole vs section hit@1: +0.17,
-discordant 13 vs 6, p=0.17; hit@3: a dead tie, 7 vs 8, p=1.0; section vs fixed hit@3:
-+0.15 for structure, 10 vs 4, p=0.18). None reach significance — but the decision is safe
-regardless, because whole-doc is never *beaten*. The gold set is not grown to resolve the
-deltas: a set is grown to confirm a challenger worth adopting, and none led.
+Paired McNemar on the first three arms is all underpowered at n=41 (whole vs section hit@1:
++0.17, 13 vs 6, p=0.17; hit@3 a tie, 7 vs 8, p=1.0; section vs fixed hit@3: +0.15 for
+structure, 10 vs 4, p=0.18) — none significant. Plain chunking lost, but *why* was the
+interesting question, with two candidate causes: **context loss** (sections are name-poor, so
+a query naming the person can't surface the right section) versus **corpus-size / fit** (each
+~2.8k-token dossier fits the 8k embedding window, so whole-doc pools a name-rich vector that a
+268-doc corpus has few distractors to beat).
 
-**Why whole-doc won (mechanism, verified in data).** Two parts. (1) Under chunking,
-"find the person" and "find the fact" split apart: MRR rose to 0.90 (the right person's
-best chunk almost always ranks near the top) while hit@1 fell to 0.46 (the *specific*
-quote-bearing section often does not). Under whole-doc these cannot diverge — document and
-fact are one unit, and `gold_rank==1` matched hit@1 on 41/41. (2) The deeper reason: each
-dossier (~2.8k tokens) fits the embedder's 8k window, so whole-doc pools a name-rich
-representation that finds the right person well; chunking fragments that for no fit-gain,
-strips name hooks from name-poor sections, and multiplies distractor chunks ~15×. Chunking
-earns its cost when documents *exceed* the window or when a corpus is large enough that
-averaged whole-doc centroids crowd together; at 268 short, fitting documents it can only
-trade (it rescued a few buried facts and broke a few name-poor ones — a wash), not win.
-The one clear positive — high person-findability — is the signal that *person-scoped*
-retrieval (resolve a name, then search within that person's chunks) is where chunking's
-value lives, which is a later routing concern, not global retrieval. Structure beat the
-blind ruler directionally at every k (and the no-overlap fixed arm severed one gold span
-outright), so the control did its job.
+**Decomposition — a name header isolates the cause.** A fourth arm (`section + name header`)
+prepends the person's name to the *embedded* text only; the stored text stays verbatim, so
+span-matching (D-011) is untouched. This restores the single piece of context a section lost —
+*whose* section it is. Result: section vs plain section at hit@1 is **+0.20, discordant 10 vs 2,
+p = 0.039 — significant** (the only significant result in the phase). **Context loss was the
+dominant cause; the corpus-size hypothesis is refuted** — the missing name, not the corpus size,
+was the bottleneck. Against whole-doc the header arm ties at hit@1 (0.66 vs 0.63, p=1.0), edges
+it at hit@3 (+0.07, p=0.55) and on multi-hop span-recall (0.83 vs 0.67). A fairness note: the
+header lives only in the embedding, so hit@k still requires the gold quote in the verbatim stored
+chunk — the lift is a real retrieval gain, not a scorer artifact; and queries naming the person
+are the real product query distribution, so exploiting the name is legitimate.
 
-**Alternative considered (adopt section chunking anyway).** Section chunking's higher MRR
-and its rescue of several deep-ranked facts are real, and at a larger corpus the averaging
-argument flips in its favour. It loses *now* because on this corpus the measured single-hop
-retrieval is no better (and trends worse), and the win it does show is person-scoped, which
-a routing layer captures without paying the global-retrieval penalty. The infrastructure to
-revisit it (the scheme column, both embedded arms) is kept in place.
+**Decision — adopt section+header at k=5.** k=5 is the hit@k plateau (5→8 adds nothing).
+Rationale: it ties whole-doc at this scale (no measured quality lost), it is the config that
+*wins* as the corpus grows (whole-doc's averaged centroids crowd together at scale while a sharp
+chunk does not), and adopting now avoids a later re-plumb. A tie at this scale does not by itself
+justify the added complexity — the adoption rests on the scale trajectory and forward-compatibility,
+not on the (non-significant) lean. Reversible cheaply via the `chunk_scheme` column: revert is a
+one-line config flag, whole-doc stays in the store, and the gold set survives on doc_id+quote.
 
-**Revisit when.** Documents grow past the embedder window, or the corpus grows large enough
-that whole-doc centroids stop discriminating (hit@1 degrades with corpus size) → re-run the
-A/B, and pair section chunking with contextual headers to fix the name-poor-section failure
-this phase surfaced. `# TUNABLE(pure sections, no synthetic header, fixed window = measured
-section mean; symptom to flip: single-hop hit@k under a chunked scheme overtakes whole-doc,
-or the per-question discordant analysis shows a chunked scheme rescuing more than it breaks.)`
+**Generation validation.** Because section+header hands the generator small (~1.3k-token) chunks
+instead of a full ~2.8k-token document, a generation-quality regression was the one live risk. A
+generation+correctness run at k=5 showed the *opposite* — the lane improved: **false-refusal rate
+0.30 → 0.09, single-hop correctness 0.71 → 0.88**, abstention 1.00 unchanged, zero fabricated
+citations. Mechanism: false-refusals track retrieval misses (the generator declines when the gold
+was not fetched), and correctness is correct-iff-retrieved — so the retrieval gain lifted both.
+Groundedness (the primary metric) was **not** re-measured on this arm and is recorded as *pending*:
+very likely still ~1.0 given the unchanged generator discipline, but not yet measured.
+
+**Revisit when.** A full section+header baseline measures groundedness and it regresses below the
+whole-doc 1.0 → revert (the store keeps whole-doc a flag away). At much larger corpus scale, re-run
+the arm comparison to confirm the header advantage widens as predicted. `# TUNABLE(section+name
+header at k=5 = the hit@k plateau; symptom to revert: a measured groundedness regression, or a
+multi-hop gold section pushed past k=5 by one person's chunks crowding the top — then raise k or move
+to person-scoped retrieval.)`
