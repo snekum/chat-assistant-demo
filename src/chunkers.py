@@ -43,6 +43,7 @@ sys.path.insert(0, "src")
 from ingest import CHARS_PER_TOKEN, RAW_DIR, parse_body, slugify  # noqa: E402
 
 SECTION_CHUNKS_PATH = Path("data/parsed/chunks.section.jsonl")
+SECTION_HDR_CHUNKS_PATH = Path("data/parsed/chunks.section_hdr.jsonl")
 FIXED_CHUNKS_PATH = Path("data/parsed/chunks.fixed.jsonl")
 
 # A section heading: 2-3 '#' then a number and a dot, at line start. `#{2,3}` (NOT `###`)
@@ -106,7 +107,15 @@ def _person_id(name: str, counts: dict[str, int]) -> str:
     return base
 
 
-def build_section() -> None:
+def build_section(with_header: bool = False) -> None:
+    """with_header=False -> the plain `section` arm. with_header=True -> the `section_hdr` arm
+    (D-023 decomposition): the person's canonical NAME is prepended to the EMBEDDED text only
+    (`embed_text`), while the stored `text` stays verbatim -- so span-matching (D-011) is untouched
+    and build_index embeds embed_text but stores text. Tests whether the plain arm lost hit@k to
+    CONTEXT LOSS (name-poor sections rank low for name-heavy queries) vs to corpus-size/fit. The
+    section's own heading line is already in `text`, so the NAME is the only lost context."""
+    scheme = "section_hdr" if with_header else "section"
+    tag = "h" if with_header else "s"
     paths = sorted(RAW_DIR.glob("*.md"))
     counts: dict[str, int] = {}
     out: list[dict] = []
@@ -123,21 +132,25 @@ def build_section() -> None:
         for num, text in secs:
             tok = round(len(text) / CHARS_PER_TOKEN)
             sec_tokens.append(tok)
-            out.append({
-                "chunk_id": f"{pid}#s{num}",       # per-scheme id; composite PK (id, scheme) in DB
-                "chunk_scheme": "section",
+            rec = {
+                "chunk_id": f"{pid}#{tag}{num}",   # per-scheme id; composite PK (id, scheme) in DB
+                "chunk_scheme": scheme,
                 "person_id": pid,
                 "doc_id": name,                     # unchanged -> hit@k doc_id join still works
                 "chunk_index": num,                 # the real section number (traceable diagnostic)
-                "text": text,
+                "text": text,                       # VERBATIM (stored + scored); header never lands here
                 "token_est": tok,
-            })
-    _write(SECTION_CHUNKS_PATH, out)
+            }
+            if with_header:
+                rec["embed_text"] = f"{name}\n\n{text}"  # name header -> EMBEDDED text only
+            out.append(rec)
+    out_path = SECTION_HDR_CHUNKS_PATH if with_header else SECTION_CHUNKS_PATH
+    _write(out_path, out)
     n = len(sec_tokens)
     st = sorted(sec_tokens)
     mean = round(sum(sec_tokens) / n)
     pct = lambda q: st[min(n - 1, int(q * n))]
-    print(f"wrote {len(out)} section chunks over {len(paths)} docs -> {SECTION_CHUNKS_PATH}")
+    print(f"wrote {len(out)} {scheme} chunks over {len(paths)} docs -> {out_path}")
     print(f"chunks/doc: {len(out) / len(paths):.1f}")
     print(f"section token_est: mean={mean} p50={pct(.5)} p90={pct(.9)} min={st[0]} max={st[-1]}")
     print(f"MEAN section chars ~= {mean * CHARS_PER_TOKEN} -> use as the fixed-window size")
@@ -194,11 +207,13 @@ def _write(path: Path, rows: list[dict]) -> None:
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("scheme", choices=["section", "fixed"])
+    ap.add_argument("scheme", choices=["section", "section_hdr", "fixed"])
     ap.add_argument("--chars", type=int, default=None, help="fixed window size (default = section mean)")
     args = ap.parse_args()
     if args.scheme == "section":
         build_section()
+    elif args.scheme == "section_hdr":
+        build_section(with_header=True)
     else:
         build_fixed(args.chars)
 

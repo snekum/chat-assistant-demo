@@ -57,8 +57,12 @@ ANSWERABLE = {"single-hop", "multi-hop"}
 
 # Phase 2 (D-023): which chunk_scheme to retrieve from, and how many chunks to fetch/feed. Both
 # recorded in config.retrieval so a run is reproducible + a chunking diff is visible (D-021).
-SCHEME = os.environ.get("EVAL_SCHEME", "whole_doc")
-RETRIEVAL_K = int(os.environ.get("EVAL_K", str(DEFAULT_K)))  # >=3 so hit@3 stays valid
+# DEFAULT adopted = section_hdr @ k=5 (D-023): the name-header decomposition showed context loss
+# (not corpus size) sank plain chunking; the header ties/edges whole-doc at 268 and is the proven
+# scale-winner. k=5 = the section_hdr hit@k plateau. Override to re-run the whole_doc baseline:
+#   EVAL_SCHEME=whole_doc EVAL_K=3 ./.venv/Scripts/python.exe eval/run.py
+SCHEME = os.environ.get("EVAL_SCHEME", "section_hdr")
+RETRIEVAL_K = int(os.environ.get("EVAL_K", "5"))  # >=3 so hit@3 stays valid; 5 = section_hdr plateau
 # Cost re-scope (D-023): skip the ~$2.17 groundedness judge on EXPERIMENT runs -- it is the lane
 # we expect NOT to move under chunking. Generation + deterministic refusal/citation + correctness
 # still run (~$0.82). The frozen-config baseline-of-record runs the full judge.
