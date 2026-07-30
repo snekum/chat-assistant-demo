@@ -740,15 +740,16 @@ one-line config flag, whole-doc stays in the store, and the gold set survives on
 **Generation validation.** Because section+header hands the generator small (~1.3k-token) chunks
 instead of a full ~2.8k-token document, a generation-quality regression was the one live risk. A
 generation+correctness run at k=5 showed the *opposite* — the lane improved: **false-refusal rate
-0.30 → 0.09, single-hop correctness 0.71 → 0.88**, abstention 1.00 unchanged, zero fabricated
+0.30 → 0.09, single-hop correctness 0.71 → 0.90**, abstention 1.00 unchanged, zero fabricated
 citations. Mechanism: false-refusals track retrieval misses (the generator declines when the gold
-was not fetched), and correctness is correct-iff-retrieved — so the retrieval gain lifted both.
-Groundedness (the primary metric) was **not** re-measured on this arm and is recorded as *pending*:
-very likely still ~1.0 given the unchanged generator discipline, but not yet measured.
+was not fetched), and correctness is correct-iff-retrieved — so the retrieval gain lifted both. A
+full baseline then measured the primary metric: **groundedness 1.00 (43/43) [0.92, 1.00]** — held,
+over *more* non-refusal answers than whole-doc's 33 (section+header refuses less), with a tighter
+lower bound. Notably the full section+header run cost **$0.63** vs whole-doc's $2.99, because the
+small chunks that were the config's risk are also what make its judge contexts ~5× cheaper.
 
-**Revisit when.** A full section+header baseline measures groundedness and it regresses below the
-whole-doc 1.0 → revert (the store keeps whole-doc a flag away). At much larger corpus scale, re-run
-the arm comparison to confirm the header advantage widens as predicted. `# TUNABLE(section+name
-header at k=5 = the hit@k plateau; symptom to revert: a measured groundedness regression, or a
-multi-hop gold section pushed past k=5 by one person's chunks crowding the top — then raise k or move
-to person-scoped retrieval.)`
+**Revisit when.** A future full baseline shows groundedness regress below 1.0 → revert (the store
+keeps whole-doc a flag away). At much larger corpus scale, re-run the arm comparison to confirm the
+header advantage widens as predicted. `# TUNABLE(section+name header at k=5 = the hit@k plateau;
+symptom to revert: a measured groundedness regression, or a multi-hop gold section pushed past k=5
+by one person's chunks crowding the top — then raise k or move to person-scoped retrieval.)`

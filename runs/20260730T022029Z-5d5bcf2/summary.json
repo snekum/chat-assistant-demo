@@ -1,0 +1,207 @@
+{
+  "hit_rate": {
+    "single-hop": {
+      "hit@1": {
+        "n": 41,
+        "successes": 27,
+        "rate": 0.6585365853658537,
+        "ci_lo": 0.5054955435372689,
+        "ci_hi": 0.7844138263335655
+      },
+      "hit@3": {
+        "n": 41,
+        "successes": 32,
+        "rate": 0.7804878048780488,
+        "ci_lo": 0.6329469790176472,
+        "ci_hi": 0.8799695984461366
+      }
+    },
+    "multi-hop": {
+      "hit@1": {
+        "n": 6,
+        "successes": 0,
+        "rate": 0.0,
+        "ci_lo": 0.0,
+        "ci_hi": 0.3903430336530645
+      },
+      "hit@3": {
+        "n": 6,
+        "successes": 4,
+        "rate": 0.6666666666666666,
+        "ci_lo": 0.29998832134152864,
+        "ci_hi": 0.9032306674407831
+      }
+    },
+    "answerable_overall": {
+      "hit@1": {
+        "n": 47,
+        "successes": 27,
+        "rate": 0.574468085106383,
+        "ci_lo": 0.43281668771211546,
+        "ci_hi": 0.7048658399817417
+      },
+      "hit@3": {
+        "n": 47,
+        "successes": 36,
+        "rate": 0.7659574468085106,
+        "ci_lo": 0.6277546774315923,
+        "ci_hi": 0.8639686357607541
+      }
+    }
+  },
+  "span_recall": {
+    "single-hop": {
+      "span_recall@1": {
+        "macro": 0.6585365853658537,
+        "micro": 0.6585365853658537
+      },
+      "span_recall@3": {
+        "macro": 0.7804878048780488,
+        "micro": 0.7804878048780488
+      }
+    },
+    "multi-hop": {
+      "span_recall@1": {
+        "macro": 0.4166666666666667,
+        "micro": 0.4166666666666667
+      },
+      "span_recall@3": {
+        "macro": 0.8333333333333334,
+        "micro": 0.8333333333333334
+      }
+    },
+    "answerable_overall": {
+      "span_recall@1": {
+        "macro": 0.6276595744680851,
+        "micro": 0.6037735849056604
+      },
+      "span_recall@3": {
+        "macro": 0.7872340425531915,
+        "micro": 0.7924528301886793
+      }
+    }
+  },
+  "mrr": {
+    "single-hop": 0.9107057457129194,
+    "multi-hop": 1.0,
+    "answerable_overall": 0.9221050122176531
+  },
+  "groundedness": {
+    "primary_over_non_refusal": {
+      "n": 43,
+      "successes": 43,
+      "rate": 1.0,
+      "ci_lo": 0.9179874299767729,
+      "ci_hi": 1.0
+    },
+    "answerable_answered": {
+      "n": 43,
+      "successes": 43,
+      "rate": 1.0,
+      "ci_lo": 0.9179874299767729,
+      "ci_hi": 1.0
+    }
+  },
+  "correctness": {
+    "abstention": {
+      "n": 12,
+      "successes": 12,
+      "rate": 1.0,
+      "ci_lo": 0.7574992425007574,
+      "ci_hi": 1.0
+    },
+    "multi-hop": {
+      "n": 6,
+      "successes": 5,
+      "rate": 0.8333333333333334,
+      "ci_lo": 0.43649056343635395,
+      "ci_hi": 0.9699474141282697
+    },
+    "single-hop": {
+      "n": 41,
+      "successes": 37,
+      "rate": 0.9024390243902439,
+      "ci_lo": 0.7745202448096945,
+      "ci_hi": 0.9614035402470386
+    },
+    "answerable_overall": {
+      "n": 47,
+      "successes": 42,
+      "rate": 0.8936170212765957,
+      "ci_lo": 0.7740546030798722,
+      "ci_hi": 0.9536959004448006
+    },
+    "overall": {
+      "n": 59,
+      "successes": 54,
+      "rate": 0.9152542372881356,
+      "ci_lo": 0.8164797538583944,
+      "ci_hi": 0.9632585086938003
+    }
+  },
+  "abstention": {
+    "abstention_accuracy": {
+      "n": 12,
+      "successes": 12,
+      "rate": 1.0,
+      "ci_lo": 0.7574992425007574,
+      "ci_hi": 1.0
+    },
+    "false_refusal_rate": {
+      "n": 47,
+      "successes": 4,
+      "rate": 0.0851063829787234,
+      "ci_lo": 0.033593579469713086,
+      "ci_hi": 0.19931805195022648
+    },
+    "refusal_label": {
+      "official": "refusal_exact",
+      "judge_divergence_n": 0,
+      "judge_divergence_rate": 0.0,
+      "divergent_ids": []
+    }
+  },
+  "citations": {
+    "n_answers": 43,
+    "fabricated_citation_rate": {
+      "n": 43,
+      "successes": 0,
+      "rate": 0.0,
+      "ci_lo": 0.0,
+      "ci_hi": 0.08201257002322722
+    },
+    "zero_citation_rate": {
+      "n": 43,
+      "successes": 0,
+      "rate": 0.0,
+      "ci_lo": 0.0,
+      "ci_hi": 0.08201257002322722
+    },
+    "mean_citations_per_answer": 1.4883720930232558
+  },
+  "cost": {
+    "prices_dated": "2026-07-24",
+    "total_usd": 0.6307,
+    "mean_usd_per_question": 0.0107,
+    "by_stage": {
+      "generation": {
+        "input_tokens": 107995,
+        "output_tokens": 3510,
+        "total_usd": 0.1255,
+        "mean_latency_s": 1.502
+      },
+      "groundedness": {
+        "input_tokens": 184813,
+        "output_tokens": 4376,
+        "total_usd": 0.4134,
+        "mean_latency_s": 2.987
+      },
+      "correctness": {
+        "input_tokens": 31967,
+        "output_tokens": 2781,
+        "total_usd": 0.0917,
+        "mean_latency_s": 2.416
+      }
+    }
+  }
+}
