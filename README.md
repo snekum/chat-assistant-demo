@@ -30,8 +30,8 @@ infrastructure. Reproducing a full run end-to-end additionally requires the priv
 
 ```
 raw .md dossiers
-      │  ingest              whole-doc chunks (1 chunk / doc — retained after a
-      ▼                      measured chunking A/B, D-023); person = first-class entity
+      │  ingest              section-header chunks (adopted via a measured A/B, D-023;
+      ▼                      name in the embedded text only); person = first-class entity
 persons.jsonl + chunks.jsonl
       │  embed               nomic-embed-text-v1.5, 768-d, local/CPU
       │                      disk cache keyed (model_id, role, sha256(text))
@@ -61,19 +61,22 @@ generation/judge metrics when an API key is present.
 
 ## Measured baseline
 
-From the current baseline-of-record (n=59 questions, clean tree; Wilson 95% intervals). Full
-numbers live in that run's `summary.json` under `runs/`.
+Retrieval + generation numbers are from the **adopted config — section-header chunking at k=5**
+(n=59 questions, clean tree; Wilson 95% intervals). Groundedness and the closed-book control are
+carried from the last *full* baseline (whole-doc, run `20260726…-2158c98`) and flagged where
+re-measurement on the new config is still pending. Full numbers live in each run's `summary.json`.
 
 | Metric | Value | Reading |
 |---|---|---|
-| single-hop hit@1 | **0.63** [0.48, 0.76] | retrieval finds the right dossier ~2/3 of the time at k=1 |
-| single-hop hit@3 | 0.71 [0.56, 0.82] | |
+| single-hop hit@1 | **0.66** [0.51, 0.78] | retrieval finds the right dossier ~2/3 of the time at k=1 |
+| single-hop hit@3 | 0.78 [0.63, 0.88] | |
+| single-hop correctness | **0.88** [0.74, 0.95] | tracks hit@k — answers are correct iff the fact was retrieved |
 | multi-hop hit@1 | **0.00** (structural) | the all-spans rule can't score hit@1 on 2-doc questions — expected; the before-picture for the routing work |
-| multi-hop span-recall@3 | 0.67 | partial credit shows progress the all-spans bar hides |
-| **groundedness (primary)** | **1.00** (33/33) [0.90, 1.00] | every non-refusal answer supported by the reports alone |
-| false-refusal rate | 0.30 | decomposes to **0 real generation false-refusals** — it's the retrieval miss-rate surfacing as honest "I don't know" |
+| multi-hop span-recall@3 | 0.83 | partial credit shows progress the all-spans bar hides |
+| false-refusal rate | **0.09** | down from 0.30 under whole-doc — decomposes to ~0 real generation false-refusals; it's the retrieval miss-rate surfacing as honest "I don't know" |
+| groundedness (primary) | 1.00 *(whole-doc; pending re-measure)* | every non-refusal answer supported by the reports alone; a full section-header baseline will re-confirm |
 | closed-book correctness | **0.00** | with empty context the model refused all 47 answerable questions → correctness is retrieval-driven, not pretraining memory |
-| cost | ~$0.05 / question | Haiku generation + Sonnet judge; ~$3 for the full n=59 run |
+| cost | ~$0.05 / question | Haiku generation + Sonnet judge; ~$3 for a full n=59 run |
 
 ---
 
@@ -97,16 +100,17 @@ drifting model never sits inside the primary denominator.
 
 ## Key design decisions
 
-- **Whole-doc chunking, retained after a measured section-chunking A/B (D-023).** Each dossier
-  follows a fixed ~15-section template, so the buried-fact hypothesis (a fact dilutes inside a
-  ~2.8k-token whole-doc embedding) was tested, not assumed: a three-arm paired A/B — whole-doc vs
-  section-aware vs a size-matched fixed window. The result **refuted the hypothesis for this
-  corpus**: whole-doc won or tied at every k (single-hop hit@1 0.63 vs section 0.46 vs fixed 0.37).
-  Because each dossier *fits* the embedder's window, whole-doc pools a name-rich representation that
-  finds the right person well, while chunking fragments it and strips name hooks. The measured payoff
-  of chunking is *person-scoped* retrieval (high person-findability, MRR 0.90) — a routing concern —
-  not global retrieval. Structure beat a blind fixed window at every k, so that control earned its
-  keep. The scheme-tagged store keeps every arm in place for a future re-test at scale.
+- **Section-header chunking, adopted after a measured A/B + a decomposition (D-023).** Each dossier
+  follows a fixed ~15-section template. A four-arm paired A/B tested the buried-fact hypothesis rather
+  than assuming it: *plain* section chunking **lost** to whole-doc (hit@1 0.46 vs 0.63). The
+  interesting question was *why* — context loss (name-poor sections) or corpus-size/fit? A decomposition
+  arm that prepends the person's name to the *embedded* text (stored text stays verbatim, so the scorer
+  is untouched) settled it: the name alone recovered **+0.20 hit@1 (0.46 → 0.66, p=0.039)** — so context
+  loss, not corpus size, was the cause. The header arm ties whole-doc at hit@1 and edges it at hit@3 and
+  multi-hop, and is the config that *wins* as the corpus grows (whole-doc's averaged centroids crowd
+  together at scale). Adopted at k=5 (the hit@k plateau); a generation check confirmed no regression —
+  false-refusal rate *fell* 0.30 → 0.09 and correctness *rose* 0.71 → 0.88, because both track retrieval
+  quality. Reversible via the scheme-tagged store (whole-doc is one config flag away).
 - **pgvector over a two-table schema (persons + chunks).** Keeping vectors and metadata in one
   store enables a native *pre-filter* — resolve a name to a person, then search only that
   person's chunks — which avoids the retrieve-then-filter failure mode of a separate vector index
@@ -195,8 +199,9 @@ gold-quote validator.
 The retrieval and evaluation core is complete: hardened metrics (Wilson intervals, rank/MRR
 diagnostics, per-stage cost/latency), a hand-authored and validated question set, a
 baseline-of-record, a closed-book contamination control, and a calibrated judge. The
-section-chunking A/B is done — a three-arm paired comparison (whole-doc vs section-aware vs a
-size-matched fixed window) that **retained whole-doc on the evidence** and located chunking's real
-payoff in person-scoped retrieval (D-023). Next up: a multi-agent routing layer (name resolution +
-a web-freshness lane), where that person-scoped retrieval becomes load-bearing, then a
-production-monitoring simulation.
+section-chunking A/B is done — a four-arm paired comparison that **adopted section-header chunking
+at k=5**: plain chunking lost, a name-header decomposition proved the cause was context loss (not
+corpus size), and the header arm tied/edged whole-doc while *improving* generation (false-refusal
+0.30 → 0.09, correctness 0.71 → 0.88); groundedness re-measurement on the new config is pending
+(D-023). Next up: a multi-agent routing layer (name resolution + a web-freshness lane), where
+per-person scoped retrieval becomes load-bearing, then a production-monitoring simulation.
