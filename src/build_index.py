@@ -43,7 +43,9 @@ def main() -> None:
         "mixed chunk_scheme in one file -- one scheme per build"
 
     emb = NomicLocal()  # cache hit -> fast; a NEW scheme's texts are cache misses -> real embed
-    vecs = emb.embed_documents([c["text"] for c in chunks])
+    # Embed `embed_text` when a scheme sets it (section_hdr: name-header prepended, D-023), else the
+    # plain text. The STORED text (upsert below) is always verbatim `text` -> D-011 scorer untouched.
+    vecs = emb.embed_documents([c.get("embed_text", c["text"]) for c in chunks])
     assert vecs.shape == (len(chunks), emb.dim), vecs.shape
 
     conn = store.connect(init=False)
