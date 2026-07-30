@@ -61,10 +61,10 @@ generation/judge metrics when an API key is present.
 
 ## Measured baseline
 
-Retrieval + generation numbers are from the **adopted config — section-header chunking at k=5**
-(n=59 questions, clean tree; Wilson 95% intervals). Groundedness and the closed-book control are
-carried from the last *full* baseline (whole-doc, run `20260726…-2158c98`) and flagged where
-re-measurement on the new config is still pending. Full numbers live in each run's `summary.json`.
+Numbers are from the **section-header @ k=5 baseline-of-record** (run `20260730…-5d5bcf2`, n=59,
+clean tree; Wilson 95% intervals) — the adopted config, now with all lanes measured. The
+closed-book contamination control is config-independent (empty-context) and carried from run
+`20260726…-2158c98`. Full numbers live in each run's `summary.json`.
 
 | Metric | Value | Reading |
 |---|---|---|
@@ -74,7 +74,7 @@ re-measurement on the new config is still pending. Full numbers live in each run
 | multi-hop hit@1 | **0.00** (structural) | the all-spans rule can't score hit@1 on 2-doc questions — expected; the before-picture for the routing work |
 | multi-hop span-recall@3 | 0.83 | partial credit shows progress the all-spans bar hides |
 | false-refusal rate | **0.09** | down from 0.30 under whole-doc — decomposes to ~0 real generation false-refusals; it's the retrieval miss-rate surfacing as honest "I don't know" |
-| groundedness (primary) | 1.00 *(whole-doc; pending re-measure)* | every non-refusal answer supported by the reports alone; a full section-header baseline will re-confirm |
+| **groundedness (primary)** | **1.00** (43/43) [0.92, 1.00] | every non-refusal answer supported by the reports alone — re-measured on section-header over 43 answers (more than whole-doc's 33, since it refuses less) |
 | closed-book correctness | **0.00** | with empty context the model refused all 47 answerable questions → correctness is retrieval-driven, not pretraining memory |
 | cost | ~$0.05 / question | Haiku generation + Sonnet judge; ~$3 for a full n=59 run |
 
