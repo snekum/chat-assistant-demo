@@ -195,6 +195,12 @@ class Resolution:
 
     status: str                                     # ResolutionStatus
     person_ids: list[str] = field(default_factory=list)
+    # The query referred to the asker ("my profile", "help me"). NOT a resolution: the asker is
+    # authenticated, so their id is already on the envelope and never needs looking up. This
+    # flag says the asker's own dossier is relevant CONTEXT -- which is a different thing from
+    # the query being ABOUT them, and keeping them out of person_ids is what stops every
+    # "who can help me..." aggregate from looking like a question about the asker.
+    self_reference: bool = False
     # mention -> candidate ids, populated when status == "ambiguous" -- a bare first name or
     # surname shared by two subjects. Never auto-resolved: >1 candidate means clarify (D-016).
     candidates: dict[str, list[str]] = field(default_factory=dict)
