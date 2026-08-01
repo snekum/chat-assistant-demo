@@ -90,8 +90,16 @@ class Resolver:
     """Built from the persons table (D-016's resolution anchor). Pure: no DB, no framework, no
     model -- so it unit-tests against a handful of fake people."""
 
-    def __init__(self, persons: list[dict], stop_tokens: frozenset[str] | set[str] = frozenset()):
+    def __init__(
+        self,
+        persons: list[dict],
+        stop_tokens: frozenset[str] | set[str] = frozenset(),
+        companies: dict[str, list[str]] | None = None,
+        company_stop_terms: frozenset[str] | set[str] = frozenset(),
+        non_subject: dict[str, list[str]] | None = None,
+    ):
         self.stop_tokens = frozenset(stop_tokens)
+        self.company_stop_terms = frozenset(company_stop_terms)
         self.by_full: dict[str, str] = {}
         self.by_token: dict[str, list[str]] = collections.defaultdict(list)
         self.name_of: dict[str, str] = {}
@@ -102,6 +110,26 @@ class Resolver:
             self.by_full[" ".join(parts)] = pid
             for token in set(parts):
                 self.by_token[token].append(pid)
+
+        # Multi-token phrases are matched as contiguous runs, longest first, so a company whose
+        # name contains a member's surname cannot be shadowed by the single-token pass.
+        self.companies = {k: list(v) for k, v in (companies or {}).items()}
+        self.non_subject = {k: list(v) for k, v in (non_subject or {}).items()}
+        self._company_keys = sorted(self.companies, key=lambda k: -len(k.split()))
+        self._non_subject_keys = sorted(self.non_subject, key=lambda k: -len(k.split()))
+
+    @staticmethod
+    def _find_runs(lowered: list[str], key: str, consumed: list[bool]) -> list[tuple[int, int]]:
+        """Positions where key's tokens appear as an unconsumed contiguous run."""
+        want = key.replace(".", "").split()
+        hits = []
+        for start in range(len(lowered) - len(want) + 1):
+            span = range(start, start + len(want))
+            if any(consumed[i] for i in span):
+                continue
+            if all(lowered[i].replace(".", "") == want[j] for j, i in enumerate(span)):
+                hits.append((start, start + len(want)))
+        return hits
 
     def _token_hits(self, token: str, capitalized: bool) -> list[str]:
         """Candidate ids for a single token, applying the stop-list rule."""
@@ -124,6 +152,7 @@ class Resolver:
         self_reference = False
         candidates: dict[str, list[str]] = {}
         unresolved: list[str] = []
+        non_subject: dict[str, list[str]] = {}
         consumed = [False] * len(tokens)
 
         # Pass 1 -- full-name pairs. Case-insensitive with no stop-list check: two tokens
@@ -134,6 +163,31 @@ class Resolver:
             if pid is not None:
                 resolved.append(pid)
                 consumed[i] = consumed[i + 1] = True
+
+        # Pass 1b -- non-subject people (Key Personnel of a member's company). Run BEFORE the
+        # single-token pass so a shared surname cannot pull them into a member's candidate set.
+        for key in self._non_subject_keys:
+            for start, end in self._find_runs(lowered, key, consumed):
+                non_subject[" ".join(tokens[start:end])] = list(self.non_subject[key])
+                for i in range(start, end):
+                    consumed[i] = True
+
+        # Pass 1c -- company mentions ("Tell me about <company>"). A company resolves to whoever
+        # runs it; more than one member at the same company is ambiguity like any other, so it
+        # goes to clarify rather than picking one (9 companies here are shared).
+        for key in self._company_keys:
+            single_word = len(key.split()) == 1
+            for start, end in self._find_runs(lowered, key, consumed):
+                if single_word and key in self.company_stop_terms and not tokens[start][:1].isupper():
+                    continue  # an ordinary word used as an ordinary word
+                owners = self.companies[key]
+                if len(owners) == 1:
+                    if owners[0] not in resolved:
+                        resolved.append(owners[0])
+                else:
+                    candidates[" ".join(tokens[start:end])] = list(owners)
+                for i in range(start, end):
+                    consumed[i] = True
 
         # Pass 2 -- single tokens not already consumed by a full-name match.
         for i, token in enumerate(tokens):
@@ -181,7 +235,7 @@ class Resolver:
             status = "ambiguous"
         elif resolved:
             status = "resolved"
-        elif unresolved:
+        elif unresolved or non_subject:
             status = "not_found"
         else:
             status = "none_named"
@@ -191,6 +245,7 @@ class Resolver:
             person_ids=resolved,
             candidates=candidates,
             unresolved=unresolved,
+            non_subject=non_subject,
             self_reference=self_reference,
         )
 
