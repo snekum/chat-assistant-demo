@@ -19,6 +19,14 @@ einops==0.8.2                   # required by nomic's trust_remote_code model
 # --- Generation + judge (D-009 / D-010) ---
 anthropic==0.117.0
 
+# --- Traces (D-031) ---
+# Spans go to runs/<id>/trace.jsonl with NO viewer running; the OTLP exporter is only needed
+# when shipping the same spans to the local Jaeger container (docker compose up -d jaeger).
+# The trace format is part of the instrument (TRACE_SCHEMA_VERSION), so these are pinned like
+# everything else -- an SDK bump that renames a field is a config diff, not a silent variable.
+opentelemetry-sdk==1.44.0
+opentelemetry-exporter-otlp-proto-http==1.44.0
+
 # --- Harness plumbing ---
 python-dotenv==1.2.2            # loads .env into os.environ (eval/run.py, judge, calibrate)
 tqdm==4.69.0                    # embed progress bar
