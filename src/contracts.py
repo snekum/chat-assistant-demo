@@ -204,9 +204,15 @@ class Resolution:
     # mention -> candidate ids, populated when status == "ambiguous" -- a bare first name or
     # surname shared by two subjects. Never auto-resolved: >1 candidate means clarify (D-016).
     candidates: dict[str, list[str]] = field(default_factory=dict)
-    # Names spotted in the query that matched nothing in `persons` -- not-in-corpus people
-    # AND non-subject names mentioned inside dossiers (e.g. a Key Personnel entry).
+    # Names spotted in the query that matched nothing anywhere -- people outside the corpus
+    # entirely (a public figure who was never a member).
     unresolved: list[str] = field(default_factory=list)
+    # Named inside a member's dossier (Key Personnel of their company) but holding no dossier
+    # of their own: mention -> ids of the dossiers naming them. NOT person_ids -- these people
+    # are not members, and the honest answer names where they appear rather than refusing
+    # outright. Kept distinct from `unresolved` because "in a profile but not a member" and
+    # "not in the corpus at all" deserve different answers.
+    non_subject: dict[str, list[str]] = field(default_factory=dict)
 
     def to_dict(self) -> dict:
         return asdict(self)
