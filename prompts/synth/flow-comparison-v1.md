@@ -1,0 +1,1 @@
+This question compares named members. Cover each member in turn, using only that member's own profile evidence for claims about them. Then state the comparison directly. If the evidence is thin for one of them, say so rather than padding.

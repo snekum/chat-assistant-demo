@@ -1,0 +1,1 @@
+This question is about a subject, not a named member. Where network profiles speak to it, lead with what members say, attributed to them by name. Where web evidence adds outside or current context, give it after, attributed to its publisher and date. Do not merge the two into a single undifferentiated claim.
