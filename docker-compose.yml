@@ -27,5 +27,24 @@ services:
       timeout: 5s
       retries: 5
 
+  # Trace viewer (D-031). OPTIONAL: the durable record is runs/<id>/trace.jsonl, written by
+  # the file exporter with no container running at all. This only renders those same spans as
+  # a waterfall -- start it when you want to LOOK at a trace:
+  #
+  #   docker compose up -d jaeger    # UI on http://localhost:16686
+  #
+  # Local-only on purpose: spans carry retrieved chunk text and real subject names, so hosted
+  # trace services are ruled out on data-sensitivity grounds. In-memory storage (the default)
+  # is right here -- traces are a debugging lens, and the JSONL artifact is what persists.
+  jaeger:
+    image: jaegertracing/all-in-one:1.65.0
+    container_name: chat-assistant-jaeger
+    environment:
+      COLLECTOR_OTLP_ENABLED: "true"
+    ports:
+      - "16686:16686"   # web UI
+      - "4318:4318"     # OTLP/HTTP -- src/tracing.py PHOENIX_ENDPOINT points here
+    profiles: ["viewer"]
+
 volumes:
   pgdata:
