@@ -8,14 +8,17 @@ questions overlap almost entirely, so the score carries no confidence informatio
 earns its place only when it produces person_ids or detects ambiguity. Anything that is merely
 "find information about X" belongs to retrieval, and building a lookup for it is scope creep.
 
-Company aliases pass that test on two counts:
-  - 9 companies here have MORE THAN ONE member. Search would silently return one of them --
-    confidently-wrong resolution, the failure never-auto-resolve exists to prevent.
-  - "Compare <company A> and <company B>" and "brief me on <company>" need person-scoped
-    retrieval, which needs ids. Global search fetches whichever ranks higher, which is the
-    multi-hop failure Phase 3 exists to fix.
+Company aliases pass that test on ONE count, and the narrowing is deliberate (D-035): they
+produce person_ids. "Compare <company A> and <company B>" and "brief me on <company>" need
+person-scoped retrieval, and global search fetches whichever ranks higher -- the multi-hop
+failure Phase 3 exists to fix. The ambiguity leg does NOT apply here: D-035 established that a
+company with several members is MULTIPLICITY, not ambiguity, so company mentions never clarify.
+
 For a plain factual question about one company, retrieval alone is sufficient and this index
-adds nothing. That is the honest boundary.
+adds nothing. Nor does it serve "anyone connected to <a company>?" when that company appears
+inside dossiers as a vendor, partner or client rather than as a member's own employer -- that is
+free-text retrieval across chunks, no index involved. Both boundaries are honest limits, not
+oversights.
 
 SCOPED to each member's CURRENT company, from the section-5 header. Prior companies (section 6),
 vendors, partners and clients are NOT aliased: "anyone connected to <a vendor named inside

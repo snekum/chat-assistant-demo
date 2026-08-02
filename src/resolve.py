@@ -160,20 +160,28 @@ class Resolver:
                 resolved.append(pid)
                 consumed[i] = consumed[i + 1] = True
 
-        # Pass 1b -- company mentions ("Tell me about <company>"). A company resolves to whoever
-        # runs it; more than one member at the same company is ambiguity like any other, so it
-        # goes to clarify rather than picking one (9 companies here are shared).
+        # Pass 1b -- company mentions ("Tell me about <company>"). A company resolves to EVERY
+        # member who runs it, and never to a clarify (D-035).
+        #
+        # MULTIPLICITY IS NOT AMBIGUITY. Two members named the same first name means the user
+        # meant exactly ONE of them and only they know which -- information is missing, so
+        # clarify is the right answer. Two members at the same company means the user meant the
+        # COMPANY, and both are complete correct answers -- nothing is missing and the user has
+        # nothing to supply. Clarify answers "which one did you mean?", a question that was
+        # never asked. That holds at 2 as much as at 10; measured here, 8 of the 9 shared
+        # companies have exactly 2 members and one has 10, so a count threshold would have been
+        # fitted to a single data point.
+        #
+        # Presentation of a large set is already governed: the top-5 cap plus honest-scope
+        # statement in the requirements memo.
         for key in self._company_keys:
             single_word = len(key.split()) == 1
             for start, end in self._find_runs(lowered, key, consumed):
                 if single_word and key in self.company_stop_terms and not tokens[start][:1].isupper():
                     continue  # an ordinary word used as an ordinary word
-                owners = self.companies[key]
-                if len(owners) == 1:
-                    if owners[0] not in resolved:
-                        resolved.append(owners[0])
-                else:
-                    candidates[" ".join(tokens[start:end])] = list(owners)
+                for owner in self.companies[key]:
+                    if owner not in resolved:
+                        resolved.append(owner)
                 for i in range(start, end):
                     consumed[i] = True
 
