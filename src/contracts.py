@@ -204,15 +204,14 @@ class Resolution:
     # mention -> candidate ids, populated when status == "ambiguous" -- a bare first name or
     # surname shared by two subjects. Never auto-resolved: >1 candidate means clarify (D-016).
     candidates: dict[str, list[str]] = field(default_factory=dict)
-    # Names spotted in the query that matched nothing anywhere -- people outside the corpus
-    # entirely (a public figure who was never a member).
+    # Names spotted in the query that matched no member. Covers BOTH someone outside the corpus
+    # entirely and someone merely mentioned inside a dossier (a colleague, a client). The
+    # resolver deliberately does not distinguish them: status `not_found` means "not a member",
+    # never "refuse". Retrieval still runs, and the refuse-if-absent contract decides -- if the
+    # corpus mentions them, synthesis answers honestly from that mention; if not, it refuses.
+    # That general rule covers every name in every dossier, which no index of a chosen subset
+    # could (D-034 amended).
     unresolved: list[str] = field(default_factory=list)
-    # Named inside a member's dossier (Key Personnel of their company) but holding no dossier
-    # of their own: mention -> ids of the dossiers naming them. NOT person_ids -- these people
-    # are not members, and the honest answer names where they appear rather than refusing
-    # outright. Kept distinct from `unresolved` because "in a profile but not a member" and
-    # "not in the corpus at all" deserve different answers.
-    non_subject: dict[str, list[str]] = field(default_factory=dict)
 
     def to_dict(self) -> dict:
         return asdict(self)

@@ -96,7 +96,6 @@ class Resolver:
         stop_tokens: frozenset[str] | set[str] = frozenset(),
         companies: dict[str, list[str]] | None = None,
         company_stop_terms: frozenset[str] | set[str] = frozenset(),
-        non_subject: dict[str, list[str]] | None = None,
     ):
         self.stop_tokens = frozenset(stop_tokens)
         self.company_stop_terms = frozenset(company_stop_terms)
@@ -114,9 +113,7 @@ class Resolver:
         # Multi-token phrases are matched as contiguous runs, longest first, so a company whose
         # name contains a member's surname cannot be shadowed by the single-token pass.
         self.companies = {k: list(v) for k, v in (companies or {}).items()}
-        self.non_subject = {k: list(v) for k, v in (non_subject or {}).items()}
         self._company_keys = sorted(self.companies, key=lambda k: -len(k.split()))
-        self._non_subject_keys = sorted(self.non_subject, key=lambda k: -len(k.split()))
 
     @staticmethod
     def _find_runs(lowered: list[str], key: str, consumed: list[bool]) -> list[tuple[int, int]]:
@@ -152,7 +149,6 @@ class Resolver:
         self_reference = False
         candidates: dict[str, list[str]] = {}
         unresolved: list[str] = []
-        non_subject: dict[str, list[str]] = {}
         consumed = [False] * len(tokens)
 
         # Pass 1 -- full-name pairs. Case-insensitive with no stop-list check: two tokens
@@ -164,15 +160,7 @@ class Resolver:
                 resolved.append(pid)
                 consumed[i] = consumed[i + 1] = True
 
-        # Pass 1b -- non-subject people (Key Personnel of a member's company). Run BEFORE the
-        # single-token pass so a shared surname cannot pull them into a member's candidate set.
-        for key in self._non_subject_keys:
-            for start, end in self._find_runs(lowered, key, consumed):
-                non_subject[" ".join(tokens[start:end])] = list(self.non_subject[key])
-                for i in range(start, end):
-                    consumed[i] = True
-
-        # Pass 1c -- company mentions ("Tell me about <company>"). A company resolves to whoever
+        # Pass 1b -- company mentions ("Tell me about <company>"). A company resolves to whoever
         # runs it; more than one member at the same company is ambiguity like any other, so it
         # goes to clarify rather than picking one (9 companies here are shared).
         for key in self._company_keys:
@@ -188,6 +176,21 @@ class Resolver:
                     candidates[" ".join(tokens[start:end])] = list(owners)
                 for i in range(start, end):
                     consumed[i] = True
+
+        # Pass 1c -- capitalised PAIRS that are not members. If the user supplied two name
+        # tokens and that pair is not a member, they named a non-member: falling through to
+        # match the FIRST NAME alone would offer "did you mean <two unrelated members>?", a
+        # clarify about people the user never referred to. Consuming the pair here is what makes
+        # "not a member" reachable for any name whose first name a member happens to share.
+        for i in range(len(tokens) - 1):
+            if consumed[i] or consumed[i + 1]:
+                continue
+            if not (tokens[i][:1].isupper() and tokens[i + 1][:1].isupper()):
+                continue
+            if lowered[i] in _SENTENCE_WORDS:
+                continue  # sentence-initial capitalisation, not a name
+            unresolved.append(f"{tokens[i]} {tokens[i + 1]}")
+            consumed[i] = consumed[i + 1] = True
 
         # Pass 2 -- single tokens not already consumed by a full-name match.
         for i, token in enumerate(tokens):
@@ -207,10 +210,11 @@ class Resolver:
                 candidates[token] = hits
                 consumed[i] = True
 
-        # Pass 3 -- capitalised runs that matched nothing: people who are not members. Covers
-        # both the not-in-corpus subject and the non-subject name mentioned inside a dossier;
-        # which of those it is cannot be told from the query, and the distinction is made
-        # downstream where the dossier text is available.
+        # Pass 3 -- capitalised runs that matched nothing: named people who are not members.
+        # Whether they are absent from the corpus entirely or merely mentioned inside someone's
+        # dossier is NOT decided here, and deliberately so: `not_found` means "not a member",
+        # not "refuse". Retrieval still runs and the refuse-if-absent contract settles it, which
+        # covers every name in every dossier rather than a hand-picked subset (D-034 amended).
         run: list[str] = []
         for i, token in enumerate(tokens):
             unknown = (
@@ -235,7 +239,7 @@ class Resolver:
             status = "ambiguous"
         elif resolved:
             status = "resolved"
-        elif unresolved or non_subject:
+        elif unresolved:
             status = "not_found"
         else:
             status = "none_named"
@@ -245,7 +249,6 @@ class Resolver:
             person_ids=resolved,
             candidates=candidates,
             unresolved=unresolved,
-            non_subject=non_subject,
             self_reference=self_reference,
         )
 
