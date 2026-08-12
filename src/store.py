@@ -105,13 +105,30 @@ def search(conn: psycopg.Connection, qvec: np.ndarray, k: int = 3,
     D-014/D-016 capability): Postgres narrows to that person BEFORE ranking, so it cannot return
     zero-after-filter. scheme defaults to whole_doc so pre-Phase-2 callers are unchanged."""
     sql = f"""
-        SELECT chunk_id, person_id, doc_id, text, 1 - (embedding <=> %(q)s) AS score
+        SELECT chunk_id, person_id, doc_id, chunk_index, text, 1 - (embedding <=> %(q)s) AS score
         FROM chunks {_scheme_where(person_id)}
         ORDER BY embedding <=> %(q)s
         LIMIT %(k)s
     """
     with conn.cursor() as cur:
         cur.execute(sql, {"q": qvec, "pid": person_id, "k": k, "scheme": scheme})
+        cols = [d.name for d in cur.description]
+        return [dict(zip(cols, row)) for row in cur.fetchall()]
+
+
+def fetch_person_chunks(conn: psycopg.Connection, person_id: str,
+                        scheme: str = "whole_doc") -> list[dict[str, Any]]:
+    """Every chunk of ONE person in a scheme, in document order -- no similarity involved.
+    Serves the brief flow (census C3): a meeting-prep summary wants the dossier, not the k
+    chunks nearest some query. whole_doc scheme = one row = the whole dossier (D-023 retained
+    it for exactly this)."""
+    sql = """
+        SELECT chunk_id, person_id, doc_id, chunk_index, text
+        FROM chunks WHERE person_id = %(pid)s AND chunk_scheme = %(scheme)s
+        ORDER BY chunk_index
+    """
+    with conn.cursor() as cur:
+        cur.execute(sql, {"pid": person_id, "scheme": scheme})
         cols = [d.name for d in cur.description]
         return [dict(zip(cols, row)) for row in cur.fetchall()]
 
