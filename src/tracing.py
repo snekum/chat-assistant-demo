@@ -57,10 +57,18 @@ VIEWER_ENDPOINT = os.environ.get("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT", "http://l
 # latency: the user sees "searching profiles..." while the work happens).
 STEP_PROGRESS: dict[str, str] = {
     "resolve": "looking up who you mean...",
-    "route": "working out what you're asking for...",
+    "route": "working out what you're asking for...",  # D-024-era step; dead since D-036
     "retrieve_corpus": "searching profiles...",
     "retrieve_web": "checking recent news...",
     "synthesize": "writing the answer...",
+    # D-036 loop era: spans are named after the tool the coordinator called, plus the
+    # model-decision round itself. Same three consumers as above; these ARE the streaming
+    # progress events the requirements memo section 8 asked for.
+    "coordinator_round": "thinking about what to do...",
+    "find_members": "searching profiles...",
+    "get_person_evidence": "reading dossiers...",
+    "web_search": "checking recent news...",
+    "respond": "writing the answer...",
 }
 
 
