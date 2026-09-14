@@ -56,6 +56,10 @@ class Embedder(Protocol):
 
     def embed_documents(self, texts: list[str]) -> np.ndarray: ...
     def embed_query(self, text: str) -> np.ndarray: ...
+    # Part of the interface because SERVING needs it: any backend with a load cost must be
+    # able to pay it at startup instead of on a user's first question. A hosted-API backend
+    # (Voyage) implements it as a no-op, which is the honest answer for that backend.
+    def warm(self) -> None: ...
 
 
 class NomicLocal:
@@ -80,11 +84,36 @@ class NomicLocal:
         self._cache = EmbeddingCache(self.model_id) if use_cache else None
         self._model = None
 
+    def warm(self) -> None:
+        """Load the model NOW, off the request path. Serving entry points call this at startup.
+
+        MEASURED REASON (2026-09-11, from the chat-smoke trace): the first live turn charged
+        32.9s to `find_members`, and the model load was all of it. Lazy loading is right for
+        the EVAL harness (a fully-cached retrieval run never imports torch -- the D-015 cache
+        payoff) and wrong for a SERVING process, where it bills one process's initialization
+        to one unlucky user. Same code, two contexts: keep the laziness, add the warm-up.
+        """
+        self._ensure_model()
+
     def _ensure_model(self):
         if self._model is None:
             from sentence_transformers import SentenceTransformer
 
-            self._model = SentenceTransformer(f"nomic-ai/{self.model_id}", trust_remote_code=True)
+            name = f"nomic-ai/{self.model_id}"
+            # OFFLINE FIRST, and this is a latency fix with real numbers behind it: cold load
+            # measured 89.6s with the hub reachable vs 11.6s with it blocked -- ~78s of hub
+            # revision checks for a model already sitting on local disk. It is also the
+            # architecturally honest default: D-008 picked a LOCAL embedder, so a startup that
+            # silently depends on huggingface.co being up contradicts the choice and would
+            # fail in an air-gapped deploy. Falls back loudly rather than refusing to start,
+            # so a fresh checkout with no cached weights still works.
+            try:
+                self._model = SentenceTransformer(name, trust_remote_code=True,
+                                                  local_files_only=True)
+            except Exception as exc:
+                print(f"[embedder] local weights unavailable ({type(exc).__name__}); "
+                      f"falling back to a hub fetch -- expect a slow first load")
+                self._model = SentenceTransformer(name, trust_remote_code=True)
         return self._model
 
     def _encode(self, prefixed: list[str]) -> np.ndarray:

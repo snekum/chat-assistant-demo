@@ -22,7 +22,7 @@ harness retries failures, the model handles results. The Anthropic SDK already r
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Iterator, Protocol
+from typing import Callable, Protocol
 
 # The coordinator's model. Closed-ish decisions over a small typed tool menu are a
 # classification-shaped job; the cheapest tier gets it until measurement says otherwise.
@@ -64,9 +64,17 @@ class Provider(Protocol):
         """One non-streaming round (coordinator decisions)."""
         ...
 
-    def stream_text(self, system: str, messages: list[dict],
-                    max_tokens: int) -> Iterator[str]:
-        """One streaming text generation (the synthesis call). Yields text deltas."""
+    def stream_text(self, system: str, messages: list[dict], tools: list[dict] | None,
+                    max_tokens: int, on_delta: Callable[[str], None] | None) -> ModelTurn:
+        """One streaming text generation (the answer call). Streams deltas to `on_delta` and
+        returns the completed turn.
+
+        It returns a ModelTurn rather than yielding an iterator for one reason: USAGE. The
+        defense pack owes an overhead row (tokens and latency of agency vs a direct retrieval
+        call), and the answer call is half of that turn's cost -- a bare delta iterator would
+        leave it unaccounted. Streaming still happens; the caller just gets the deltas through
+        the callback instead of by iterating.
+        """
         ...
 
 
@@ -107,12 +115,36 @@ class AnthropicProvider:
             raw_content=[b.to_dict() for b in resp.content],
         )
 
-    def stream_text(self, system: str, messages: list[dict],
-                    max_tokens: int = 2048) -> Iterator[str]:
+    def stream_text(self, system: str, messages: list[dict], tools: list[dict] | None = None,
+                    max_tokens: int = 2048,
+                    on_delta: Callable[[str], None] | None = None) -> ModelTurn:
+        # WHY tools ARE SENT TO A CALL THAT MUST NOT USE THEM: the answer call replays the
+        # turn's thread verbatim, and that history contains tool_use blocks -- the wire format
+        # requires the tool definitions whenever it does. tool_choice "none" is what forbids
+        # another round of calls. Sending the menu without "none" would let the answer call
+        # start its own loop, outside harness law; omitting the menu is a 400.
+        extra: dict = {}
+        if tools:
+            extra["tools"] = tools
+            extra["tool_choice"] = {"type": "none"}
+
         with self.client.messages.stream(
             model=self.synth_model,
             max_tokens=max_tokens,
             system=system,
             messages=messages,
+            **extra,
         ) as stream:
-            yield from stream.text_stream
+            for delta in stream.text_stream:
+                if on_delta is not None:
+                    on_delta(delta)
+            final = stream.get_final_message()
+
+        return ModelTurn(
+            text="".join(b.text for b in final.content if b.type == "text"),
+            tool_calls=(),
+            stop_reason=final.stop_reason or "",
+            input_tokens=final.usage.input_tokens,
+            output_tokens=final.usage.output_tokens,
+            raw_content=[b.to_dict() for b in final.content],
+        )
