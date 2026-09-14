@@ -480,7 +480,7 @@ if __name__ == "__main__":
     assert not answered_without_retrieval(env), "retrieval ran; bypass must not fire"
 
     # The bypass tripwire fires on a declared answer with no retrieval in the trajectory.
-    bare = Envelope(query="What is Craig Hunter's revenue?", asker="p042")
+    bare = Envelope(query="What is Dana Whitfield's revenue?", asker="p042")
     bare.response_mode = "answer"
     assert answered_without_retrieval(bare), "bypass predicate must fire on tool-less answers"
     bare.response_mode = "clarify"  # clarify/refuse/redirect answer nothing -> exempt

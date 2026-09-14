@@ -388,14 +388,14 @@ if __name__ == "__main__":
     from provider import ModelTurn, ToolCallRequest
     from resolve import Resolver
 
-    people = [{"person_id": "p-aaron", "canonical_name": "Aaron Silva"},
-              {"person_id": "p-craig", "canonical_name": "Craig Hunter"}]
+    people = [{"person_id": "p-jane", "canonical_name": "Jane Rivera"},
+              {"person_id": "p-dana", "canonical_name": "Dana Whitfield"}]
     resolver = Resolver(people)
 
     @dataclass
     class FakeThread:
         thread_id: str = "t-test"
-        asker: str = "p-aaron"
+        asker: str = "p-jane"
         messages: list = dc_field(default_factory=list)
         artifacts: list = dc_field(default_factory=list)
 
@@ -410,9 +410,9 @@ if __name__ == "__main__":
         schemas = []
 
         def find_members(self, criterion, exclude_person_ids=None, within_person_ids=None):
-            ev = CorpusEvidence(person_id="p-craig", doc_id="Craig Hunter", chunk_id="c#h5",
+            ev = CorpusEvidence(person_id="p-dana", doc_id="Dana Whitfield", chunk_id="c#h5",
                                 text="...", score=0.8, section=5)
-            return {"ok": True, "members": [{"person_id": "p-craig", "name": "Craig Hunter",
+            return {"ok": True, "members": [{"person_id": "p-dana", "name": "Dana Whitfield",
                                              "best_score": 0.8, "snippets": [ev]}],
                     "evidence": [ev], "candidates_considered": 1}
 
@@ -453,10 +453,10 @@ if __name__ == "__main__":
         [ToolCallRequest("1", "find_members", {"criterion": "pharma"})],
         [ToolCallRequest("2", "respond", {"outcome": "answer",
                                           "standalone_query": "who is in pharma?"})],
-    ], answer="Craig Hunter fits what you described.")
+    ], answer="Dana Whitfield fits what you described.")
     env = c.run_turn(FakeThread(), "Anyone in pharma I can talk to?")
     assert env.response_mode == "answer" and len(env.artifacts) == 1
-    assert env.response == "Craig Hunter fits what you described."
+    assert env.response == "Dana Whitfield fits what you described."
     assert [cl.tool for cl in env.tool_calls] == ["find_members"]
     print("1. answer: text comes from the pinned writer, artifact recorded")
 
@@ -482,7 +482,7 @@ if __name__ == "__main__":
     # 5 -- bypass: the tripwire now reads the SYNTH output, which is what users see.
     try:
         c, _ = coord([[ToolCallRequest("1", "respond", {"outcome": "answer"})]],
-                     answer="Craig Hunter runs a China supply chain.")
+                     answer="Dana Whitfield runs a China supply chain.")
         c.run_turn(FakeThread(), "Hi")
         raise AssertionError("bypass tripwire failed to fire")
     except BypassViolation as e:
@@ -493,7 +493,7 @@ if __name__ == "__main__":
         [ToolCallRequest("1", "find_members", {"criterion": "pharma"})],
         [ToolCallRequest("2", "find_members", {"criterion": "pharma"})],
         [ToolCallRequest("3", "respond", {"outcome": "answer", "standalone_query": "who?"})],
-    ], answer="Craig Hunter.")
+    ], answer="Dana Whitfield.")
     env = c.run_turn(FakeThread(), "Anyone in pharma?")
     assert len([cl for cl in env.tool_calls if cl.error == "duplicate_call"]) == 1
     print("6. duplicate breaker: repeat call structured-errored")
@@ -518,7 +518,7 @@ if __name__ == "__main__":
     # 9 -- refusal is the exact contract string regardless of anything the model wrote.
     c, _ = coord([[ToolCallRequest("1", "respond", {"outcome": "refuse",
                                                    "text": "Sorry, no idea."})]])
-    env = c.run_turn(FakeThread(), "What is Craig Hunter's shoe size?")
+    env = c.run_turn(FakeThread(), "What is Dana Whitfield's shoe size?")
     assert env.response == REFUSAL_STRING
     print("9. refuse: exact contract string enforced")
 
