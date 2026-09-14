@@ -23,10 +23,18 @@ law):
   * NOMINATE-VS-APPOINT (D-028) is enforced one layer down, in tools.py: the model's
     person references never become ids except through the resolver.
 
-OWED TO STEP 5, marked where it happens: the `answer` outcome currently returns the
-model's respond-text as a placeholder. The real answer path is a SEPARATE streamed
-generation under the pinned synth-v1 prompt (D-032's byte-comparability instrument) --
-wired at Step 5 with the re-baseline, so no metric ever reads the placeholder.
+ANSWER PATH (Step 5, done): a declared `answer` does NOT use the model's respond-text.
+It runs a SEPARATE streamed call under the pinned synth-v1 prompt (synthesize.py), over
+this turn's whole thread. Owner's call: the product is conversational, so the writer needs
+the conversation. Two consequences live here rather than in the prompt:
+  * `respond` no longer asks for `text` on an answer -- the answer is written by the synth
+    call, so a coordinator-written draft would be output tokens paid for and discarded
+    (measured: 432 wasted output tokens on the first smoke turn).
+  * The asker's own words are recorded as UserStatedEvidence. The writer can see them in
+    the thread, so it WILL use them ("as you mentioned, your Vietnam expansion") -- and the
+    groundedness judge reads env.evidence, not the thread. Without this the judge scores
+    correct conversational memory as an unsupported claim: a false alarm on the primary
+    metric. Typed, so a user's claim can never become a fact about a member (no person_id).
 """
 from __future__ import annotations
 
@@ -40,6 +48,7 @@ from contracts import (
     Resolution,
     ResultSetArtifact,
     ToolCall,
+    UserStatedEvidence,
     answered_without_retrieval,
     validate,
 )
@@ -95,7 +104,9 @@ RESPOND_TOOL: dict = {
         "grounded in this conversation's evidence (put the self-contained question being "
         "answered in standalone_query); refuse when the evidence cannot support an answer; "
         "clarify ONLY after a tool reported an ambiguous person reference; redirect for "
-        "advice questions, after finding the relevant members to point at."
+        "advice questions, after finding the relevant members to point at. Do NOT write the "
+        "answer text yourself for outcome=answer -- it is written separately from the "
+        "evidence you gathered. `text` is required only for clarify and redirect."
     ),
     "input_schema": {
         "type": "object",
@@ -103,14 +114,15 @@ RESPOND_TOOL: dict = {
             "outcome": {"type": "string",
                         "enum": ["answer", "refuse", "clarify", "redirect"]},
             "text": {"type": "string",
-                     "description": "The user-facing message for this outcome."},
+                     "description": "The user-facing message. Required for clarify and "
+                                    "redirect; omit for answer and refuse."},
             "standalone_query": {
                 "type": "string",
                 "description": "outcome=answer only: the question being answered, "
                                "self-contained, pronouns and ordinals resolved.",
             },
         },
-        "required": ["outcome", "text"],
+        "required": ["outcome"],
     },
 }
 
@@ -123,11 +135,18 @@ class BudgetExhausted(RuntimeError):
     """The model would not end the turn inside the round budget."""
 
 
+class AnswerPathMissing(RuntimeError):
+    """A turn declared `answer` with no synthesize_fn wired. Hard failure on purpose: the
+    old placeholder path would silently hand a metric the coordinator's draft instead of a
+    synth-v1 answer, which is exactly what Step 5 existed to prevent."""
+
+
 class Coordinator:
     def __init__(self, provider, toolbox_factory: Callable, resolver, store,
                  synthesize_fn: Callable | None = None):
         """toolbox_factory(asker_id) -> Toolbox (or a test double with the same three
-        tool methods). synthesize_fn lands at Step 5 (the pinned synth-v1 answer path)."""
+        tool methods). synthesize_fn(env, messages, tools) -> provider.ModelTurn is the
+        pinned synth-v1 answer path; build it with synthesize.make_answer_writer."""
         self.provider = provider
         self.toolbox_factory = toolbox_factory
         self.resolver = resolver
@@ -145,6 +164,9 @@ class Coordinator:
 
         messages = list(thread.messages)
         messages.append({"role": "user", "content": user_text})
+        # C5: the asker's own words, typed as evidence so the judge sees what the writer sees.
+        env.evidence.append(UserStatedEvidence(text=user_text, turn=len(thread.messages),
+                                               thread_id=thread.thread_id))
         seen_calls: set[str] = set()
         respond_args: dict | None = None
         trc = tracer("coordinator")
@@ -154,18 +176,21 @@ class Coordinator:
         # root spans were the first thing the first real trace read got wrong.
         with trc.start_as_current_span("turn") as turn_span:
             turn_span.set_attribute("thread_id", thread.thread_id)
-            respond_args = self._run_rounds(toolbox, env, thread, messages, system,
-                                            tool_menu, seen_calls, trc)
+            respond_args, rounds_used = self._run_rounds(
+                toolbox, env, thread, messages, system, tool_menu, seen_calls, trc)
             if respond_args is None:
                 turn_span.set_attribute("outcome", "budget_exhausted")
                 raise BudgetExhausted(
                     f"no respond after {MAX_ROUNDS} rounds + forced final (thread "
                     f"{thread.thread_id})"
                 )
-            self._finalize(env, respond_args, user_text)
+            self._finalize(env, respond_args, user_text, messages, tool_menu, trc)
             turn_span.set_attribute("outcome", env.response_mode or "")
-            turn_span.set_attribute("rounds", len([m for m in messages
-                                                   if m.get("role") == "assistant"]))
+            # THIS turn's rounds. The first version counted assistant messages in
+            # `messages`, which carries the whole thread -- so a 2-round turn reported 8 on
+            # the third turn of a conversation. The defense pack's overhead row reads this
+            # number, so an inflated count would have overstated the loop's own cost.
+            turn_span.set_attribute("rounds", rounds_used)
 
         # Close the thread record: the final text as an ordinary assistant turn -- so the
         # NEXT turn's model reads the conversation exactly as the user experienced it.
@@ -175,7 +200,7 @@ class Coordinator:
         return env
 
     def _run_rounds(self, toolbox, env, thread, messages, system, tool_menu,
-                    seen_calls, trc) -> dict | None:
+                    seen_calls, trc) -> tuple[dict | None, int]:
         respond_args: dict | None = None
         for round_no in range(MAX_ROUNDS + 1):
             forced_final = round_no == MAX_ROUNDS
@@ -210,8 +235,8 @@ class Coordinator:
                 messages.append({"role": "user", "content": results})
 
             if respond_args is not None:
-                return respond_args
-        return None
+                return respond_args, round_no + 1
+        return None, MAX_ROUNDS + 1
 
     # --- execution ------------------------------------------------------------------------
 
@@ -285,7 +310,8 @@ class Coordinator:
 
     # --- finalization: harness law ----------------------------------------------------------
 
-    def _finalize(self, env: Envelope, args: dict, user_text: str) -> None:
+    def _finalize(self, env: Envelope, args: dict, user_text: str, messages: list[dict],
+                  tool_menu: list[dict], trc) -> None:
         outcome = args["outcome"]
         env.response_mode = outcome
         env.resolved_query = args.get("standalone_query", "")
@@ -294,11 +320,34 @@ class Coordinator:
             # The exact contract sentence, always -- D-019's deterministic detector anchors
             # on this string; a generated paraphrase would blind it.
             env.response = REFUSAL_STRING
-        elif outcome == "answer" and self.synthesize_fn is not None:
-            env.response = self.synthesize_fn(env)  # Step 5: pinned synth-v1, streamed
+        elif outcome == "answer":
+            if self.synthesize_fn is None:
+                raise AnswerPathMissing(
+                    "declared outcome 'answer' with no synthesize_fn; wire "
+                    "synthesize.make_answer_writer(provider) before serving or scoring"
+                )
+            # The separate pinned call. It reads the SAME messages the coordinator read, so
+            # ordinals, corrections and stated facts are available to the writer; the tool
+            # menu rides along only to satisfy the wire format (tool_choice "none").
+            with trc.start_as_current_span("synthesize") as span:
+                turn = self.synthesize_fn(env, messages, tool_menu)
+                record_llm_call(
+                    span,
+                    model=getattr(self.provider, "synth_model", "unknown"),
+                    usage={"input_tokens": turn.input_tokens,
+                           "output_tokens": turn.output_tokens},
+                )
+                span.set_attribute("stop_reason", turn.stop_reason)
+            env.response = turn.text.strip()
         else:
-            # answer (placeholder until Step 5), clarify, redirect: the model's text.
-            env.response = args.get("text", "")
+            # clarify and redirect ARE the model's text -- there is no evidence to synthesize
+            # from, only a question to ask or people to point at.
+            text = args.get("text", "").strip()
+            if not text:
+                raise ValueError(
+                    f"outcome {outcome!r} requires text on the respond call and none was given"
+                )
+            env.response = text
 
         if answered_without_retrieval(env):
             self._name_scan(env, user_text)
@@ -329,10 +378,13 @@ class Coordinator:
 
 
 if __name__ == "__main__":
-    # Pure self-check: scripted provider + fake toolbox + in-memory store. No DB, no API.
+    # Pure self-check: scripted provider + fake toolbox + fake answer writer + in-memory
+    # store. No DB, no API. The answer writer is a DOUBLE, not the placeholder that used to
+    # live in _finalize -- the point of Step 5 is that nothing can read a coordinator draft.
     from dataclasses import dataclass, field as dc_field
 
     from contracts import CorpusEvidence
+    from contracts import UserStatedEvidence as USE
     from provider import ModelTurn, ToolCallRequest
     from resolve import Resolver
 
@@ -366,6 +418,7 @@ if __name__ == "__main__":
 
     class ScriptedProvider:
         model = "fake"
+        synth_model = "fake-synth"
 
         def __init__(self, script):
             self.script = list(script)
@@ -376,63 +429,105 @@ if __name__ == "__main__":
                              raw_content=[{"type": "tool_use", "id": c.id, "name": c.name,
                                            "input": c.args} for c in calls])
 
-    def coord(script):
-        return Coordinator(ScriptedProvider(script), lambda asker: FakeToolbox(),
-                           resolver, FakeStore())
+    class FakeWriter:
+        """Stands in for the pinned synth-v1 call; records what it was handed."""
 
-    # 1 -- happy path: search, then answer. Artifact created, bypass silent (retrieval ran).
-    env = coord([
+        def __init__(self, text):
+            self.text = text
+            self.seen_messages = None
+            self.seen_tools = None
+
+        def __call__(self, env, messages, tools):
+            self.seen_messages, self.seen_tools = messages, tools
+            return ModelTurn(text=self.text, tool_calls=(), stop_reason="end_turn",
+                             input_tokens=11, output_tokens=7)
+
+    def coord(script, answer="An answer.", writer=True):
+        w = FakeWriter(answer) if writer else None
+        c = Coordinator(ScriptedProvider(script), lambda asker: FakeToolbox(),
+                        resolver, FakeStore(), synthesize_fn=w)
+        return c, w
+
+    # 1 -- happy path: search, then answer. The ANSWER comes from the writer, not respond.
+    c, w = coord([
         [ToolCallRequest("1", "find_members", {"criterion": "pharma"})],
         [ToolCallRequest("2", "respond", {"outcome": "answer",
-                                          "text": "Craig Hunter fits.",
                                           "standalone_query": "who is in pharma?"})],
-    ]).run_turn(FakeThread(), "Anyone in pharma I can talk to?")
+    ], answer="Craig Hunter fits what you described.")
+    env = c.run_turn(FakeThread(), "Anyone in pharma I can talk to?")
     assert env.response_mode == "answer" and len(env.artifacts) == 1
-    assert [c.tool for c in env.tool_calls] == ["find_members"]
-    print("1. answer-with-retrieval: outcome declared, artifact recorded")
+    assert env.response == "Craig Hunter fits what you described."
+    assert [cl.tool for cl in env.tool_calls] == ["find_members"]
+    print("1. answer: text comes from the pinned writer, artifact recorded")
 
-    # 2 -- greeting: answer with no tools and no member names is allowed.
-    env = coord([[ToolCallRequest("1", "respond",
-                                  {"outcome": "answer", "text": "Hello! How can I help?"})]]
-                ).run_turn(FakeThread(), "Hi")
-    assert env.response == "Hello! How can I help?"
-    print("2. greeting: no-retrieval answer with no member names passes")
+    # 2 -- the writer is handed the THREAD and the tool menu (the owner's whole-thread call).
+    assert w.seen_messages is not None and len(w.seen_messages) >= 3
+    assert any(m.get("role") == "user" for m in w.seen_messages)
+    assert w.seen_tools is not None, "tool menu must ride along for the wire format"
+    print(f"2. writer saw {len(w.seen_messages)} messages + the tool menu")
 
-    # 3 -- bypass: naming a member with no retrieval trips the wire.
+    # 3 -- C5: the asker's own words are on the envelope as typed evidence, no person_id.
+    stated = [e for e in env.evidence if isinstance(e, USE)]
+    assert len(stated) == 1 and stated[0].text == "Anyone in pharma I can talk to?"
+    assert "person_id" not in stated[0].to_dict()
+    print("3. user-stated evidence recorded, carries no person_id")
+
+    # 4 -- greeting: a no-retrieval answer naming nobody still passes the tripwire.
+    c, _ = coord([[ToolCallRequest("1", "respond", {"outcome": "answer"})]],
+                 answer="Good to see you again. What can I help with?")
+    env = c.run_turn(FakeThread(), "Hi")
+    assert env.response.startswith("Good to see you")
+    print("4. greeting: no-retrieval answer with no member names passes")
+
+    # 5 -- bypass: the tripwire now reads the SYNTH output, which is what users see.
     try:
-        coord([[ToolCallRequest("1", "respond",
-                                {"outcome": "answer",
-                                 "text": "Craig Hunter runs a China supply chain."})]]
-              ).run_turn(FakeThread(), "Hi")
+        c, _ = coord([[ToolCallRequest("1", "respond", {"outcome": "answer"})]],
+                     answer="Craig Hunter runs a China supply chain.")
+        c.run_turn(FakeThread(), "Hi")
         raise AssertionError("bypass tripwire failed to fire")
     except BypassViolation as e:
-        print(f"3. bypass tripwire fired: {e}")
+        print(f"5. bypass tripwire fired on the written answer: {e}")
 
-    # 4 -- duplicate call: second identical call gets a structured error, not an execution.
-    env = coord([
+    # 6 -- duplicate call: second identical call gets a structured error, not an execution.
+    c, _ = coord([
         [ToolCallRequest("1", "find_members", {"criterion": "pharma"})],
         [ToolCallRequest("2", "find_members", {"criterion": "pharma"})],
-        [ToolCallRequest("3", "respond", {"outcome": "answer", "text": "Craig Hunter.",
-                                          "standalone_query": "who?"})],
-    ]).run_turn(FakeThread(), "Anyone in pharma?")
-    dup = [c for c in env.tool_calls if c.error == "duplicate_call"]
-    assert len(dup) == 1
-    print("4. duplicate breaker: repeat call structured-errored")
+        [ToolCallRequest("3", "respond", {"outcome": "answer", "standalone_query": "who?"})],
+    ], answer="Craig Hunter.")
+    env = c.run_turn(FakeThread(), "Anyone in pharma?")
+    assert len([cl for cl in env.tool_calls if cl.error == "duplicate_call"]) == 1
+    print("6. duplicate breaker: repeat call structured-errored")
 
-    # 5 -- clarify without ambiguity is an envelope violation (G-001 precondition).
+    # 7 -- clarify without ambiguity is an envelope violation (G-001 precondition).
     try:
-        coord([[ToolCallRequest("1", "respond",
-                                {"outcome": "clarify", "text": "Which one?"})]]
-              ).run_turn(FakeThread(), "Tell me about Ross")
+        c, _ = coord([[ToolCallRequest("1", "respond",
+                                       {"outcome": "clarify", "text": "Which one?"})]])
+        c.run_turn(FakeThread(), "Tell me about Ross")
         raise AssertionError("clarify precondition failed to fire")
     except ValueError as e:
-        print(f"5. clarify precondition held: {e}")
+        print(f"7. clarify precondition held: {e}")
 
-    # 6 -- refusal is the exact contract string regardless of the model's text.
-    env = coord([[ToolCallRequest("1", "respond",
-                                  {"outcome": "refuse", "text": "Sorry, no idea."})]]
-                ).run_turn(FakeThread(), "What is Craig Hunter's shoe size?")
+    # 8 -- clarify/redirect still owe their text; an empty one fails loudly.
+    try:
+        c, _ = coord([[ToolCallRequest("1", "respond", {"outcome": "redirect"})]])
+        c.run_turn(FakeThread(), "How should I pivot to SaaS?")
+        raise AssertionError("missing redirect text failed to fire")
+    except ValueError as e:
+        print(f"8. redirect without text rejected: {e}")
+
+    # 9 -- refusal is the exact contract string regardless of anything the model wrote.
+    c, _ = coord([[ToolCallRequest("1", "respond", {"outcome": "refuse",
+                                                   "text": "Sorry, no idea."})]])
+    env = c.run_turn(FakeThread(), "What is Craig Hunter's shoe size?")
     assert env.response == REFUSAL_STRING
-    print("6. refuse: exact contract string enforced")
+    print("9. refuse: exact contract string enforced")
+
+    # 10 -- no answer path wired = hard failure, never a silent coordinator draft.
+    try:
+        c, _ = coord([[ToolCallRequest("1", "respond", {"outcome": "answer"})]], writer=False)
+        c.run_turn(FakeThread(), "Hi")
+        raise AssertionError("missing answer path failed to fire")
+    except AnswerPathMissing as e:
+        print(f"10. unwired answer path rejected: {e}")
 
     print("coordinator harness self-check passed")

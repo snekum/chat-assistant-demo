@@ -70,16 +70,34 @@ REFUSAL_STRING = "I don't have information on that."
 # Phase-4 gate see it -- and ONLY the display layer drops it.
 SELF_CITATION_MARKER = "[self]"
 
+# User-stated facts (contracts.UserStatedEvidence, census C5) get the SAME treatment for the
+# SAME reason, so this is D-032's decided principle applied rather than a new call: an omitted
+# citation would make the stated fact look retrieved-but-uncited, which is the residue signal
+# meaning "synthesis dropped good evidence". A marker keeps every claim traceable internally
+# and drops out only at the display boundary. Distinct from [self] on purpose -- [self] is a
+# fact from the asker's DOSSIER, [stated] is a fact the asker SAID, and collapsing the two
+# would throw away the provenance UserStatedEvidence exists to carry.
+STATED_CITATION_MARKER = "[stated]"
+
+DISPLAY_MARKERS = (SELF_CITATION_MARKER, STATED_CITATION_MARKER)
+
 
 def strip_display_markers(answer: str) -> str:
     """Render for the user: internal-only citation markers come out. Applied at the display
     boundary ONLY -- never before the citation parser, the judge, or the gate, all of which must
     score the answer as written.
 
-    Removes any whitespace preceding the marker too, otherwise "...in 2019 [self]." renders as
-    "...in 2019 ." -- a space before the full stop on every asker claim.
+    Removes horizontal whitespace preceding a marker too, otherwise "...in 2019 [self]."
+    renders as "...in 2019 ." -- a space before the full stop on every asker claim.
+
+    NEWLINES SURVIVE. The first version collapsed all whitespace, which was invisible while
+    answers were one short paragraph and wrong the moment they were not: the first live
+    smoke rendered a structured multi-paragraph brief as a single wall of text. Only runs of
+    spaces and tabs WITHIN a line are collapsed.
     """
-    return " ".join(re.sub(r"\s*" + re.escape(SELF_CITATION_MARKER), "", answer).split())
+    pattern = "|".join(r"[ \t]*" + re.escape(m) for m in DISPLAY_MARKERS)
+    cleaned = re.sub(pattern, "", answer)
+    return "\n".join(" ".join(line.split()) for line in cleaned.splitlines()).strip()
 
 
 def _sha256(text: str) -> str:
@@ -137,6 +155,99 @@ def contract_versions(flow: str) -> dict[str, str]:
         "section_sha256": _sha256(_read(flow_file(flow))),
         "system_sha256": _sha256(build_system(flow)),
     }
+
+
+# --- The answer path (D-032 wired here at Step 5) --------------------------------------------
+
+# WHICH PROMPT THE ANSWER IS WRITTEN UNDER -- OPEN OWNER CALL, provisionally "core_only".
+# Nothing has been measured under either setting; the Step-5 re-baseline runs AFTER this is
+# settled, so no number depends on the provisional value.
+#
+# D-032(a) chose core + per-flow section, with the D-024 router supplying `flow`. D-036 deleted
+# the router, so nothing selects a section at runtime any more -- and only 2 of the 9 sections
+# were ever written. That reopens D-032's own PRE-REGISTERED TELL ("once all nine sections
+# exist, if they average under ~5 lines apiece the shared core dominates and a single prompt
+# was the right call -- collapse back and retire the section versions").
+#
+#   "core_only" -- the 13-rule core IS the contract. Output shape is left to the model, which
+#                  under the whole-thread answer call reads the conversation and rule 12
+#                  ("match length to what was asked"). Retires FLOW_SECTION_VERSIONS.
+#   "sections"  -- keep D-032(a) as written. Costs the 7 missing section files PLUS a selector,
+#                  since no router exists: either a shape enum declared on `respond`, or a
+#                  shape derived from the turn's recorded trajectory.
+ANSWER_PROMPT_MODE = "core_only"
+
+# TUNABLE(2048 tokens for the answer: the last baseline's answers averaged ~75 output tokens
+#         and the longest was well under 500, so this is ~4x headroom for the aggregate shape
+#         (5 members + why-them lines). Symptom wrong: answers truncated mid-sentence, visible
+#         as stop_reason "max_tokens" on the synthesize span -> raise.)
+ANSWER_MAX_TOKENS = 2048
+
+
+def answer_system(flow: str | None = None) -> str:
+    """The system prompt the ANSWER is written under -- the pinned instrument, kept separate
+    from the coordinator's prompt on purpose. A tool-description edit changes what the
+    coordinator sees and must NOT change the bytes an answer was generated under, or every
+    generation metric re-baselines on a change that has nothing to do with how answers are
+    written (D-021's own argument for hashing questions.jsonl, one layer over)."""
+    core = core_template().format(refusal_string=REFUSAL_STRING)
+    if ANSWER_PROMPT_MODE == "core_only":
+        return core
+    if ANSWER_PROMPT_MODE == "sections":
+        if flow is None:
+            raise ValueError(
+                "ANSWER_PROMPT_MODE='sections' needs a flow label, and D-036 left nothing to "
+                "produce one; decide the selector before switching modes"
+            )
+        return build_system(flow)
+    raise ValueError(f"unknown ANSWER_PROMPT_MODE {ANSWER_PROMPT_MODE!r}")
+
+
+def answer_contract_versions(flow: str | None = None) -> dict[str, str]:
+    """What run config snapshots for the answer path (D-021). system_sha256 is the one that
+    settles comparability: it covers the core, the refusal-string substitution, and the section
+    if one is in play."""
+    versions = {
+        "synth_contract_version": SYNTH_CONTRACT_VERSION,
+        "answer_prompt_mode": ANSWER_PROMPT_MODE,
+        "refusal_string": REFUSAL_STRING,
+        "core_sha256": _sha256(core_template()),
+        "system_sha256": _sha256(answer_system(flow)),
+    }
+    if ANSWER_PROMPT_MODE == "sections":
+        versions["flow"] = flow or ""
+        versions["flow_section_version"] = FLOW_SECTION_VERSIONS[flow]
+        versions["section_sha256"] = _sha256(_read(flow_file(flow)))
+    return versions
+
+
+def make_answer_writer(provider, on_delta=None, flow: str | None = None):
+    """Build the coordinator's `synthesize_fn`: the SEPARATE, pinned, streamed answer call.
+
+    Shape of the call, and why each part is what it is:
+      * system   = answer_system() -- pinned bytes, its own version clock (above).
+      * messages = the turn's thread VERBATIM, including tool results. The owner's call: this
+        is a conversational product, so the writer needs the conversation to do its job. The
+        cost is that it also sees the tool scaffolding, which core rule 13 forbids it narrating.
+      * tools    = re-sent with tool_choice "none". The tools are NOT for calling -- the wire
+        format requires tool definitions whenever the history carries tool_use blocks, and
+        "none" is what forbids a second round of calls. (Harmless for caching: tool_choice is
+        not part of the cache prefix, so the tools+system prefix still hits.)
+
+    Returns text; the caller owns what it does with the deltas (streaming passthrough, D-037).
+    """
+    def write(env, messages: list[dict], tools: list[dict]) -> ModelTurnLike:
+        return provider.stream_text(
+            answer_system(flow), messages, tools=tools,
+            max_tokens=ANSWER_MAX_TOKENS, on_delta=on_delta,
+        )
+    return write
+
+
+# Typing shim: provider.stream_text returns a provider.ModelTurn, but importing it here would
+# make this module depend on the vendor seam for a type alone. The contract is structural:
+# .text, .input_tokens, .output_tokens, .stop_reason.
+ModelTurnLike = object
 
 
 if __name__ == "__main__":
