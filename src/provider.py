@@ -51,8 +51,10 @@ class ModelTurn:
     text: str
     tool_calls: tuple[ToolCallRequest, ...]
     stop_reason: str
-    input_tokens: int = 0
+    input_tokens: int = 0           # UNCACHED input only (the tail after the cache read)
     output_tokens: int = 0
+    cache_read_tokens: int = 0      # served from cache, billed ~0.1x
+    cache_creation_tokens: int = 0  # written to cache, billed ~1.25x
     raw_content: list = field(default_factory=list, hash=False, compare=False)
 
 
@@ -78,6 +80,28 @@ class Provider(Protocol):
         ...
 
 
+# PROMPT CACHING (automatic, 5-minute TTL) on both calls. Caching is a PREFIX match in render
+# order tools -> system -> messages, and the loop is append-only within a turn and across turns,
+# so each request can re-read everything the previous request with the same prefix sent.
+# Automatic placement puts the breakpoint on the last block and moves it forward as the thread
+# grows -- no marker bookkeeping in the loop.
+#   * Where it pays: coordinator round 3+ re-reads round 2's request; in a multi-turn chat every
+#     call re-reads the previous turns (the measured $0.012 -> $0.046/turn growth).
+#   * Where it cannot: Haiku 4.5's minimum cacheable prefix is 4,096 tokens and the static
+#     tools+system prefix is ~1.3k, so the prompt alone never caches; the coordinator and the
+#     answer writer have different system prompts, so they never share an entry.
+#   * It changes billing, not what the model sees -- generation metrics stay comparable.
+# TUNABLE(automatic 5-min caching on every call; symptom wrong: cache_creation_tokens on every
+#   2-round turn with zero later reads dominating eval spend (the write premium is paid and never
+#   read back) -> skip caching on the first coordinator round(s) of a fresh thread.)
+CACHE_CONTROL = {"type": "ephemeral"}
+
+
+def _cache_usage(usage) -> dict:
+    return {"cache_read_tokens": getattr(usage, "cache_read_input_tokens", 0) or 0,
+            "cache_creation_tokens": getattr(usage, "cache_creation_input_tokens", 0) or 0}
+
+
 class AnthropicProvider:
     """The Anthropic implementation. Everything vendor-specific lives in this class."""
 
@@ -100,6 +124,7 @@ class AnthropicProvider:
             # in the menu this makes the declared outcome structural: there is no bare-text
             # path out of the loop for the harness to interpret.
             tool_choice={"type": "any"} if force_tool else {"type": "auto"},
+            cache_control=CACHE_CONTROL,
         )
         calls = tuple(
             ToolCallRequest(id=b.id, name=b.name, args=dict(b.input))
@@ -112,6 +137,7 @@ class AnthropicProvider:
             stop_reason=resp.stop_reason or "",
             input_tokens=resp.usage.input_tokens,
             output_tokens=resp.usage.output_tokens,
+            **_cache_usage(resp.usage),
             raw_content=[b.to_dict() for b in resp.content],
         )
 
@@ -133,6 +159,7 @@ class AnthropicProvider:
             max_tokens=max_tokens,
             system=system,
             messages=messages,
+            cache_control=CACHE_CONTROL,
             **extra,
         ) as stream:
             for delta in stream.text_stream:
@@ -146,5 +173,6 @@ class AnthropicProvider:
             stop_reason=final.stop_reason or "",
             input_tokens=final.usage.input_tokens,
             output_tokens=final.usage.output_tokens,
+            **_cache_usage(final.usage),
             raw_content=[b.to_dict() for b in final.content],
         )

@@ -96,6 +96,9 @@ def record_llm_call(span, *, model: str, usage: dict, operation: str = "chat") -
     span.set_attribute("gen_ai.usage.output_tokens", usage.get("output_tokens", 0))
     if usage.get("cache_read_tokens"):
         span.set_attribute("gen_ai.usage.cache_read_input_tokens", usage["cache_read_tokens"])
+    if usage.get("cache_creation_tokens"):
+        span.set_attribute("gen_ai.usage.cache_creation_input_tokens",
+                           usage["cache_creation_tokens"])
 
 
 # --- File exporter: the durable record -------------------------------------------------------

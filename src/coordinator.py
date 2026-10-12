@@ -74,6 +74,12 @@ MAX_ROUNDS = 5
 ROUND_MAX_TOKENS = 1024
 
 
+def _usage(turn) -> dict:
+    return {"input_tokens": turn.input_tokens, "output_tokens": turn.output_tokens,
+            "cache_read_tokens": getattr(turn, "cache_read_tokens", 0),
+            "cache_creation_tokens": getattr(turn, "cache_creation_tokens", 0)}
+
+
 def _read(path: Path) -> str:
     return path.read_text(encoding="utf-8").replace("\r\n", "\n").strip()
 
@@ -220,8 +226,7 @@ class Coordinator:
                 turn = self.provider.complete(system, messages, tools=menu,
                                               force_tool=True, max_tokens=ROUND_MAX_TOKENS)
                 record_llm_call(span, model=getattr(self.provider, "model", "unknown"),
-                                usage={"input_tokens": turn.input_tokens,
-                                       "output_tokens": turn.output_tokens})
+                                usage=_usage(turn))
                 span.set_attribute("round", round_no)
 
             messages.append({"role": "assistant", "content": turn.raw_content})
@@ -342,8 +347,7 @@ class Coordinator:
                 record_llm_call(
                     span,
                     model=getattr(self.provider, "synth_model", "unknown"),
-                    usage={"input_tokens": turn.input_tokens,
-                           "output_tokens": turn.output_tokens},
+                    usage=_usage(turn),
                 )
                 span.set_attribute("stop_reason", turn.stop_reason)
             env.response = turn.text.strip()

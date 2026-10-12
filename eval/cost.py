@@ -17,8 +17,9 @@ from __future__ import annotations
 #   wrong: recomputed $/question diverges from recorded `usage` x these rates.)
 PRICING = {
     "claude-haiku-4-5": {"input": 1.00, "output": 5.00},
-    # intro $2/$10 ran through 2026-08-31 (runs before then were priced at it); standard since
-    "claude-sonnet-5":  {"input": 3.00, "output": 15.00},
+    # Rechecked 2026-10-12 against the current price table: still $2/$10 -- the expected
+    # post-intro revert to $3/$15 did not happen.
+    "claude-sonnet-5":  {"input": 2.00, "output": 10.00},
 }
 PRICES_DATED = "2026-10-12"
 _CACHE_READ_MULT = 0.10

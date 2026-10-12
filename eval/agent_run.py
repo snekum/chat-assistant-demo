@@ -84,7 +84,8 @@ class CountingProvider:
     def _meta(self, stage, model, turn, t0) -> dict:
         return {"stage": stage, "model": model, "latency_s": round(time.perf_counter() - t0, 3),
                 "input_tokens": turn.input_tokens, "output_tokens": turn.output_tokens,
-                "cache_read_tokens": 0, "cache_creation_tokens": 0}
+                "cache_read_tokens": turn.cache_read_tokens,
+                "cache_creation_tokens": turn.cache_creation_tokens}
 
     def complete(self, system, messages, tools, force_tool, max_tokens):
         t0 = time.perf_counter()
@@ -208,6 +209,9 @@ def main() -> None:
                 stages[st] = {"model": calls[0]["model"], "calls": len(calls),
                               "input_tokens": sum(c["input_tokens"] for c in calls),
                               "output_tokens": sum(c["output_tokens"] for c in calls),
+                              "cache_read_tokens": sum(c["cache_read_tokens"] for c in calls),
+                              "cache_creation_tokens": sum(c["cache_creation_tokens"]
+                                                           for c in calls),
                               "latency_s": round(sum(c["latency_s"] for c in calls), 3),
                               "cost_usd": round(sum(cost.cost_usd(c) or 0 for c in calls), 6)}
         for st in ("groundedness", "correctness"):
@@ -267,9 +271,12 @@ def summarize(results: list[dict]) -> dict:
     by_stage: dict = {}
     for c in priced:
         for st, m in c["stages"].items():
-            b = by_stage.setdefault(st, {"input_tokens": 0, "output_tokens": 0, "total_usd": 0.0})
-            b["input_tokens"] += m["input_tokens"]
-            b["output_tokens"] += m["output_tokens"]
+            b = by_stage.setdefault(st, {"input_tokens": 0, "output_tokens": 0,
+                                         "cache_read_tokens": 0, "cache_creation_tokens": 0,
+                                         "total_usd": 0.0})
+            for k in ("input_tokens", "output_tokens", "cache_read_tokens",
+                      "cache_creation_tokens"):
+                b[k] += m.get(k, 0)
             b["total_usd"] = round(b["total_usd"] + (m.get("cost_usd") or 0), 4)
     return {
         "n": len(results),
@@ -325,6 +332,11 @@ def report(run_id: str, s: dict) -> None:
           f"latency p50 {s['latency_s']['p50']}s p95 {s['latency_s']['p95']}s")
     print(f"cost ${s['cost']['total_usd']} (${s['cost']['mean_usd_per_question']}/q) "
           f"{ {k: v['total_usd'] for k, v in s['cost']['by_stage'].items()} }")
+    for st in ("coordinator", "synth"):
+        b = s["cost"]["by_stage"].get(st)
+        if b:
+            print(f"  cache {st}: uncached-in {b['input_tokens']} | read {b['cache_read_tokens']}"
+                  f" | written {b['cache_creation_tokens']}")
 
 
 if __name__ == "__main__":
