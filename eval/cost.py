@@ -17,9 +17,10 @@ from __future__ import annotations
 #   wrong: recomputed $/question diverges from recorded `usage` x these rates.)
 PRICING = {
     "claude-haiku-4-5": {"input": 1.00, "output": 5.00},
-    "claude-sonnet-5":  {"input": 2.00, "output": 10.00},  # intro; 3.00/15.00 after 2026-08-31
+    # intro $2/$10 ran through 2026-08-31 (runs before then were priced at it); standard since
+    "claude-sonnet-5":  {"input": 3.00, "output": 15.00},
 }
-PRICES_DATED = "2026-07-24"
+PRICES_DATED = "2026-10-12"
 _CACHE_READ_MULT = 0.10
 _CACHE_WRITE_MULT = 1.25  # 5-min TTL default; 1h TTL would be 2.0 (we don't cache these calls)
 
