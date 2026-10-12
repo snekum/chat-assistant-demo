@@ -362,9 +362,14 @@ class Coordinator:
         (echoes of the conversation are honest), the user's own words, or the asker.
         Anything else is a name the writer never looked up.
 
-        An AMBIGUOUS mention (a bare first name two members share) passes if ANY of its
-        candidates is accounted for: prose says "Dana" after naming Dana Whitfield, and
-        flagging the other Dana would crash a correct answer on a resolver artifact."""
+        Only FULL-NAME mentions are checked. The first version ran the whole resolver over
+        the answer and crashed 2 of 59 correct re-baseline answers: a capitalised single token
+        resolved as a surname ("University of Washington", "launched in March"). Answers name
+        people in full (synth rule 5), so the full-name pair is the signal; the cost is that a
+        surname-only or first-name-only mention of an unretrieved member goes unchecked.
+        # TUNABLE(full-name pairs only; symptom wrong: a judged-ungrounded answer that refers
+        #   to an unretrieved member by surname alone -> add capitalised surname tokens back,
+        #   gated by a proper-noun stop-list built from answer text, not query text.)"""
         allowed = self._member_ids(user_text) | {env.asker}
         allowed |= {e.person_id for e in env.corpus_evidence()}
         for art in list(getattr(thread, "artifacts", [])) + list(env.artifacts):
@@ -373,11 +378,7 @@ class Coordinator:
             if isinstance(m.get("content"), str):
                 allowed |= self._member_ids(m["content"])
 
-        res = self.resolver.resolve(env.response)
-        leaked = set(res.person_ids) - allowed
-        for cands in res.candidates.values():
-            if not set(cands) & allowed:
-                leaked |= set(cands)
+        leaked = set(self.resolver.full_names(env.response)) - allowed
         if leaked:
             where = ("with no retrieval call in the trajectory"
                      if answered_without_retrieval(env) else "outside the turn's evidence")
@@ -555,12 +556,13 @@ if __name__ == "__main__":
         except BypassViolation as e:
             print(f"8b. {outcome} naming an unretrieved member rejected: {e}")
 
-    # 8c -- a bare first name shared by two members passes when one of them is accounted
-    # for; and a member named earlier in the thread is an honest echo.
+    # 8c -- bare first names and surname-as-ordinary-word never trip the scan (the
+    # re-baseline's two false positives); a member named earlier in the thread is an echo.
     c, _ = coord([
         [ToolCallRequest("1", "find_members", {"criterion": "pharma"})],
         [ToolCallRequest("2", "respond", {"outcome": "answer"})],
-    ], answer="Dana Whitfield fits. Dana also knows Alex Placeholder.")
+    ], answer="Dana Whitfield fits. Dana uses Placeholder data. She also knows Alex "
+                "Placeholder.")
     t = FakeThread(messages=[{"role": "user", "content": "I met Alex Placeholder once."},
                              {"role": "assistant", "content": "Noted."}])
     env = c.run_turn(t, "Anyone in pharma?")

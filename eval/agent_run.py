@@ -282,7 +282,7 @@ def summarize(results: list[dict]) -> dict:
         "n": len(results),
         "errors": {"n": sum(1 for x in results if x["error"]),
                    "ids": [x["id"] for x in results if x["error"]]},
-        "outcomes": {o: sum(1 for x in results if x["outcome"] == o)
+        "outcomes": {o: sum(1 for x in results if (x["outcome"] or "error") == o)
                      for o in sorted({x["outcome"] or "error" for x in results})},
         "evidence_hit": binom([x["evidence_hit"] for x in answerable]),
         "groundedness": binom([x["grounded"] for x in non_refusal]),

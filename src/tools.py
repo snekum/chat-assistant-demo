@@ -96,7 +96,9 @@ class Toolbox:
     # The loop reads the menu off the toolbox instance (test doubles carry their own).
     @property
     def schemas(self) -> list[dict]:
-        return TOOL_SCHEMAS
+        if WEB_SEARCH_ENABLED:
+            return TOOL_SCHEMAS
+        return [t for t in TOOL_SCHEMAS if t["name"] != "web_search"]
 
     def __init__(self, emb, conn, resolver: Resolver, asker: str):
         self.emb = emb
@@ -283,6 +285,12 @@ class Toolbox:
 # Hand-written (D-029 idiom: schema design is eval design; the trajectory eval scores calls
 # against these shapes). Descriptions are model-facing prompt surface: versioned with the
 # coordinator prompt, not tweaked casually.
+# web_search is OFF the menu until Step 7 lands a provider. Advertising a tool that always
+# returns web_unavailable cost the first agent re-baseline: 13 of 59 turns spent a round on it,
+# and 3 single-hop questions about a member's own project were refused after calling ONLY the
+# dead tool -- the model never tried the dossiers. The method stays, so Step 7 flips one flag.
+WEB_SEARCH_ENABLED = False
+
 TOOL_SCHEMAS: list[dict] = [
     {
         "name": "get_person_evidence",

@@ -135,6 +135,19 @@ class Resolver:
             return []  # ordinary word used as an ordinary word
         return self.by_token.get(key, [])
 
+    def full_names(self, text: str) -> list[str]:
+        """Members named by FULL name (first + last, in order) -- pass 1 of resolve() alone.
+        The name-provenance scan reads output prose, where a lone capitalised token is usually
+        an ordinary proper noun ("University of Washington", "in March") that happens to be a
+        member's surname. A full-name pair is corroboration in itself; a single token is not."""
+        lowered = [normalize(t) for t in _WORD.findall(text)]
+        out: list[str] = []
+        for i in range(len(lowered) - 1):
+            pid = self.by_full.get(f"{lowered[i]} {lowered[i + 1]}")
+            if pid is not None and pid not in out:
+                out.append(pid)
+        return out
+
     def resolve(self, query: str) -> Resolution:
         """Spot mentions and look them up. Longest match first: a full-name pair wins over its
         parts, so "grant miller" resolves even though bare lowercase "grant" would not.

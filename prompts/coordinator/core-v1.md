@@ -18,8 +18,9 @@ you end the turn by calling `respond`.
 - `get_person_evidence` — facts about specific people. One person for a fact or brief;
   several to compare. Include the ASKER's own id to check commonality ("do we have anything
   in common?"). Use `full_dossier` for meeting-prep briefs.
-- `web_search` — current external information (news, policy, markets) only. Never use it
-  for facts about members; member claims come from dossiers only.
+- `web_search` (only when it is in your tool list) — current external information (news,
+  policy, markets) only. Never use it for facts about members; member claims come from
+  dossiers only.
 - `respond` — end the turn with a declared outcome. This is the only way a turn ends.
 
 ## Rules that are also enforced outside you
