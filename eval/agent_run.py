@@ -24,6 +24,7 @@ Needs Postgres up and ANTHROPIC_API_KEY.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import sys
@@ -239,7 +240,9 @@ def main() -> None:
     config = {
         "run_id": run_id, "created_utc": datetime.now(timezone.utc).isoformat(),
         "runner": "eval/agent_run.py", "git": git_info(),
-        "asker": asker,
+        # person_ids are real-name slugs and config.json is committed: record a hash that
+        # pins WHICH asker without naming them (same selection rule reproduces it).
+        "asker_sha256_12": hashlib.sha256(asker.encode()).hexdigest()[:12],
         "coordinator": {**coord_versions(), "model": provider.model, "max_rounds": MAX_ROUNDS},
         "answer": {**answer_contract_versions(), "model": provider.synth_model},
         "judge": {"id": JUDGE_MODEL, "rubric_version": RUBRIC_VERSION},

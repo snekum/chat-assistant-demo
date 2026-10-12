@@ -22,7 +22,11 @@ law):
     refuse is the EXACT contract string (D-019's detector anchors on it); the envelope is
     validated at the end of every turn.
   * NOMINATE-VS-APPOINT (D-028) is enforced one layer down, in tools.py: the model's
-    person references never become ids except through the resolver.
+    person references never become ids except through the resolver. One half lives HERE:
+    a raw person_id is accepted only if this conversation has already shown it (the asker,
+    or an id inside a tool result or earlier message). The first agent re-baseline caught
+    the model INVENTING ids -- slugs are guessable (first-last) -- and tools.py accepted any
+    valid id, so an invented one silently searched an unrelated member.
 
 ANSWER PATH (Step 5, done): a declared `answer` or `redirect` runs a SEPARATE streamed call
 under the pinned synth-v1 prompt (synthesize.py), over this turn's whole thread. The model
@@ -237,7 +241,8 @@ class Coordinator:
                     respond_args = call.args
                     results.append(self._tool_result(call.id, {"ok": True}, ok=True))
                     continue
-                results.append(self._execute(toolbox, env, thread, call, seen_calls, trc))
+                results.append(self._execute(toolbox, env, thread, call, seen_calls, trc,
+                                             messages))
             if results:
                 messages.append({"role": "user", "content": results})
 
@@ -247,7 +252,18 @@ class Coordinator:
 
     # --- execution ------------------------------------------------------------------------
 
-    def _execute(self, toolbox, env: Envelope, thread, call, seen: set[str], trc) -> dict:
+    def _execute(self, toolbox, env: Envelope, thread, call, seen: set[str], trc,
+                 messages: list[dict] | None = None) -> dict:
+        unseen = self._unseen_ids(env, call.args, messages or [])
+        if unseen:
+            payload = {"ok": False, "error": "unseen_person_id",
+                       "detail": f"{unseen} did not appear in this conversation. Pass people as "
+                                 "the user named them (name or company), or use person_ids "
+                                 "from earlier tool results. Never construct an id."}
+            env.record_tool_call(ToolCall(tool=call.name, args=call.args, ok=False,
+                                          error="unseen_person_id"))
+            return self._tool_result(call.id, payload, ok=False)
+
         key = f"{call.name}:{json.dumps(call.args, sort_keys=True)}"
         if key in seen:
             # A stalled loop announces itself instead of burning a second execution.
@@ -302,6 +318,26 @@ class Coordinator:
             )
 
         return self._tool_result(call.id, payload, ok=ok)
+
+    def _unseen_ids(self, env: Envelope, args: dict, messages: list[dict]) -> list[str]:
+        """Raw person_ids in the call that the conversation never showed. Names and company
+        mentions are not ids and pass through to the resolver untouched."""
+        refs = list(args.get("person_refs") or []) + list(args.get("within_person_ids") or [])
+        ids = [r.strip() for r in refs if isinstance(r, str) and r.strip() in self.resolver.name_of]
+        if not ids:
+            return []
+        # What the conversation SHOWED the model: user text, tool results, and finished
+        # assistant replies. Never the model's own tool_use inputs -- an id it typed into an
+        # earlier call is exactly what this check exists to catch.
+        shown_parts: list[str] = []
+        for m in messages:
+            content = m.get("content")
+            if isinstance(content, str):
+                shown_parts.append(content)
+            elif m.get("role") == "user":
+                shown_parts.append(json.dumps(content, default=str))
+        shown = "\n".join(shown_parts)
+        return [i for i in ids if i != env.asker and i not in shown]
 
     @staticmethod
     def _tool_result(call_id: str, payload: dict, ok: bool) -> dict:
@@ -578,6 +614,23 @@ if __name__ == "__main__":
     env = c.run_turn(FakeThread(), "Tell me about Dana")
     assert env.response == resolver.clarify_question(env.resolution), env.response
     print(f"8d. clarify text is deterministic: {env.response}")
+
+    # 8e -- an id the conversation never showed is rejected before any tool runs; the
+    # same id taken from an earlier tool result is accepted.
+    c, _ = coord([
+        [ToolCallRequest("1", "get_person_evidence", {"query": "q", "person_refs": ["p-dana"]})],
+        [ToolCallRequest("2", "respond", {"outcome": "refuse"})],
+    ])
+    env = c.run_turn(FakeThread(), "Who sold a company in 2016?")
+    assert [cl.error for cl in env.tool_calls] == ["unseen_person_id"], env.tool_calls
+    c, _ = coord([
+        [ToolCallRequest("1", "find_members", {"criterion": "pharma"})],
+        [ToolCallRequest("2", "find_members", {"criterion": "x", "within_person_ids": ["p-dana"]})],
+        [ToolCallRequest("3", "respond", {"outcome": "answer"})],
+    ], answer="Dana Whitfield.")
+    env = c.run_turn(FakeThread(), "Anyone in pharma?")
+    assert all(cl.ok for cl in env.tool_calls), env.tool_calls
+    print("8e. invented person_id rejected; id from a tool result accepted")
 
     # 9 -- refusal is the exact contract string regardless of anything the model wrote.
     c, _ = coord([[ToolCallRequest("1", "respond", {"outcome": "refuse",
