@@ -162,7 +162,7 @@ _SECTION_REF = re.compile(r"^section\s+\d+$", re.I)  # a within-doc pointer, not
 def _citation_names(answer: str) -> list[str]:
     """Doc-citation candidates from the answer's [..] tags (D-020). The contract form is
     [Full Name], but at the 1d baseline the generator also emitted corpus-style variants --
-    [cite: [redacted]], [cite: 1], [[redacted], Section 5] -- so normalize before matching: strip a
+    [cite: Jane Rivera], [cite: 1], [Jane Rivera, Section 5] -- so normalize before matching: strip a
     leading 'cite:' prefix (baseline sh-008/mh-005 mis-flagged VALID names fabricated because
     'cite' leaked into the normalized token), and drop non-doc brackets (bare numerics = corpus
     [cite: N] markers; 'Section N' = a within-doc pointer). This lowers only FALSE fabrications;

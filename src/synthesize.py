@@ -4,16 +4,16 @@ Replaces f6-v1 on the product path. The workers return evidence, never prose (D-
 is the only place text is written -- which makes this contract half the measurement instrument,
 exactly as f6-v1 was, and versioned for the same reason.
 
-STRUCTURE: core + per-flow section. The CORE holds the rules the metrics measure -- grounding,
-citations, the refusal string, confidence handling, voice. Each FLOW SECTION holds only the
-shape of that flow's output. The split is about what the model SEES: an edit to the composition
-section leaves the bytes sent for a person_fact question byte-identical, so that question's
-groundedness stays comparable across the edit. Under a single blended prompt every edit changes
-every question's input and re-baselines everything.
+STRUCTURE: ONE core prompt (D-032(a) revised 2026-10-12). D-032 chose core + per-flow section,
+with the router supplying the flow. D-036 deleted the router, only 2 of 9 sections were ever
+written (40 and 53 words), and D-032's own pre-registered tell ("if sections average under ~5
+lines, collapse back") fired. The two written sections became core rules 16-17. What this gives
+up: an edit to any rule now changes the bytes for EVERY question type, so per-type metrics show
+WHICH type moved but not which rule moved it.
 
-    # TUNABLE(core+section split; symptom it was ceremony: once all nine sections are written,
-    #         if they average under ~5 lines apiece the shared core dominates and a single
-    #         prompt was the right call -- collapse back and retire the section versions.)
+    # TUNABLE(single prompt; revisit when the re-baseline shows one question type drifting
+    #         while the others hold across a core edit -- that is the attribution the
+    #         sections bought, and the signal that it is needed back.)
 
 PROMPTS LIVE IN FILES, NOT IN CODE (D-032). prompts/synth/*.md, loaded at import and hashed
 into run config. Rationale is D-021's own precedent: sha256(questions.jsonl) went into config so
@@ -41,13 +41,6 @@ SYNTH_CONTRACT_VERSION = "synth-v1"
 
 PROMPT_DIR = Path(__file__).resolve().parent.parent / "prompts" / "synth"
 
-# Per-section versions. A section bump invalidates comparability for THAT flow's questions only.
-# The value is also the filename suffix: flow-<name>-<version>.md.
-FLOW_SECTION_VERSIONS: dict[str, str] = {
-    "comparison": "v1",
-    "topic": "v1",
-}
-
 CORE_FILE = PROMPT_DIR / "core-v1.md"
 
 # The exact sentence that marks a WHOLE-ANSWER refusal -- both evidence kinds came back
@@ -59,7 +52,8 @@ CORE_FILE = PROMPT_DIR / "core-v1.md"
 REFUSAL_STRING = "I don't have information on that."
 
 # Asker-fact citations (D-032, owner's call: exempt WITH A MARKER). Citing a member's own profile
-# back to them by name reads absurd in conversation ("your AI startup in Hyderabad [profile: [redacted]]"), so rule 6 has the model tag those claims [self] instead.
+# back to them by name reads absurd in conversation ("your lending startup [profile: Jane
+# Rivera]"), so rule 6 has the model tag those claims [self] instead.
 #
 # Why a marker rather than plain omission -- this is the whole point of the choice. An omitted
 # citation would make asker evidence look RETRIEVED-BUT-UNCITED, which is exactly the residue
@@ -114,67 +108,7 @@ def core_template() -> str:
     return _read(CORE_FILE)
 
 
-def flow_file(flow: str) -> Path:
-    try:
-        version = FLOW_SECTION_VERSIONS[flow]
-    except KeyError:
-        raise ValueError(
-            f"no synth-v1 section for flow {flow!r}; have {sorted(FLOW_SECTION_VERSIONS)}"
-        ) from None
-    return PROMPT_DIR / f"flow-{flow}-{version}.md"
-
-
-def build_system(flow: str) -> str:
-    """Assemble the system prompt for one flow: core (refusal string substituted) + section.
-
-    Raises on a flow with no section rather than silently sending the bare core -- a missing
-    section would be an invisible contract hole, and invisible holes are what the version
-    discipline exists to prevent.
-    """
-    core = core_template().format(refusal_string=REFUSAL_STRING)
-    section = _read(flow_file(flow))
-    return f"{core}\n\n## For this question\n\n{section}"
-
-
-def contract_versions(flow: str) -> dict[str, str]:
-    """What the run config snapshots (D-021), so a moved metric is attributable.
-
-    Three hashes, each answering a different question:
-      core_sha256    -- did the shared rules change?
-      section_sha256 -- did THIS flow's output shape change?
-      system_sha256  -- did the exact bytes the model saw change? (the one that settles
-                        comparability; it also covers the refusal-string substitution)
-    """
-    return {
-        "synth_contract_version": SYNTH_CONTRACT_VERSION,
-        "flow": flow,
-        "flow_section_version": FLOW_SECTION_VERSIONS[flow],
-        "refusal_string": REFUSAL_STRING,
-        "core_sha256": _sha256(core_template()),
-        "section_sha256": _sha256(_read(flow_file(flow))),
-        "system_sha256": _sha256(build_system(flow)),
-    }
-
-
 # --- The answer path (D-032 wired here at Step 5) --------------------------------------------
-
-# WHICH PROMPT THE ANSWER IS WRITTEN UNDER -- OPEN OWNER CALL, provisionally "core_only".
-# Nothing has been measured under either setting; the Step-5 re-baseline runs AFTER this is
-# settled, so no number depends on the provisional value.
-#
-# D-032(a) chose core + per-flow section, with the D-024 router supplying `flow`. D-036 deleted
-# the router, so nothing selects a section at runtime any more -- and only 2 of the 9 sections
-# were ever written. That reopens D-032's own PRE-REGISTERED TELL ("once all nine sections
-# exist, if they average under ~5 lines apiece the shared core dominates and a single prompt
-# was the right call -- collapse back and retire the section versions").
-#
-#   "core_only" -- the 13-rule core IS the contract. Output shape is left to the model, which
-#                  under the whole-thread answer call reads the conversation and rule 12
-#                  ("match length to what was asked"). Retires FLOW_SECTION_VERSIONS.
-#   "sections"  -- keep D-032(a) as written. Costs the 7 missing section files PLUS a selector,
-#                  since no router exists: either a shape enum declared on `respond`, or a
-#                  shape derived from the turn's recorded trajectory.
-ANSWER_PROMPT_MODE = "core_only"
 
 # TUNABLE(2048 tokens for the answer: the last baseline's answers averaged ~75 output tokens
 #         and the longest was well under 500, so this is ~4x headroom for the aggregate shape
@@ -183,48 +117,41 @@ ANSWER_PROMPT_MODE = "core_only"
 ANSWER_MAX_TOKENS = 2048
 
 
-def answer_system(flow: str | None = None) -> str:
+def answer_system(asker_name: str = "") -> str:
     """The system prompt the ANSWER is written under -- the pinned instrument, kept separate
     from the coordinator's prompt on purpose. A tool-description edit changes what the
     coordinator sees and must NOT change the bytes an answer was generated under, or every
     generation metric re-baselines on a change that has nothing to do with how answers are
-    written (D-021's own argument for hashing questions.jsonl, one layer over)."""
+    written (D-021's own argument for hashing questions.jsonl, one layer over).
+
+    The ASKER line rides OUTSIDE the pinned bytes, the same seam coordinator.build_system uses.
+    Without it the writer could not apply rules 6, 10, 14 or 15 -- it would not know whose
+    profile is [self], whom to greet, or whom it must never speak as. (The first wiring sent
+    the core alone; the coordinator knew the asker, the writer did not.)"""
     core = core_template().format(refusal_string=REFUSAL_STRING)
-    if ANSWER_PROMPT_MODE == "core_only":
+    if not asker_name:
         return core
-    if ANSWER_PROMPT_MODE == "sections":
-        if flow is None:
-            raise ValueError(
-                "ANSWER_PROMPT_MODE='sections' needs a flow label, and D-036 left nothing to "
-                "produce one; decide the selector before switching modes"
-            )
-        return build_system(flow)
-    raise ValueError(f"unknown ANSWER_PROMPT_MODE {ANSWER_PROMPT_MODE!r}")
+    return f"{core}\n\n## Session\nYou are speaking to: {asker_name}"
 
 
-def answer_contract_versions(flow: str | None = None) -> dict[str, str]:
-    """What run config snapshots for the answer path (D-021). system_sha256 is the one that
-    settles comparability: it covers the core, the refusal-string substitution, and the section
-    if one is in play."""
-    versions = {
+def answer_contract_versions() -> dict[str, str]:
+    """What run config snapshots for the answer path (D-021). core_sha256 settles
+    comparability: the assembled prompt differs per asker by the session line only."""
+    return {
         "synth_contract_version": SYNTH_CONTRACT_VERSION,
-        "answer_prompt_mode": ANSWER_PROMPT_MODE,
         "refusal_string": REFUSAL_STRING,
         "core_sha256": _sha256(core_template()),
-        "system_sha256": _sha256(answer_system(flow)),
+        "pinned_sha256": _sha256(answer_system()),
     }
-    if ANSWER_PROMPT_MODE == "sections":
-        versions["flow"] = flow or ""
-        versions["flow_section_version"] = FLOW_SECTION_VERSIONS[flow]
-        versions["section_sha256"] = _sha256(_read(flow_file(flow)))
-    return versions
 
 
-def make_answer_writer(provider, on_delta=None, flow: str | None = None):
+def make_answer_writer(provider, name_of: dict[str, str], on_delta=None):
     """Build the coordinator's `synthesize_fn`: the SEPARATE, pinned, streamed answer call.
+    Serves both `answer` and `redirect` -- every model-written sentence a user sees goes
+    through this one measured contract.
 
     Shape of the call, and why each part is what it is:
-      * system   = answer_system() -- pinned bytes, its own version clock (above).
+      * system   = answer_system(asker name) -- pinned core plus the per-session asker line.
       * messages = the turn's thread VERBATIM, including tool results. The owner's call: this
         is a conversational product, so the writer needs the conversation to do its job. The
         cost is that it also sees the tool scaffolding, which core rule 13 forbids it narrating.
@@ -233,11 +160,12 @@ def make_answer_writer(provider, on_delta=None, flow: str | None = None):
         "none" is what forbids a second round of calls. (Harmless for caching: tool_choice is
         not part of the cache prefix, so the tools+system prefix still hits.)
 
+    name_of maps person_id -> display name (Resolver.name_of).
     Returns text; the caller owns what it does with the deltas (streaming passthrough, D-037).
     """
     def write(env, messages: list[dict], tools: list[dict]) -> ModelTurnLike:
         return provider.stream_text(
-            answer_system(flow), messages, tools=tools,
+            answer_system(name_of.get(env.asker, "")), messages, tools=tools,
             max_tokens=ANSWER_MAX_TOKENS, on_delta=on_delta,
         )
     return write
@@ -250,19 +178,11 @@ ModelTurnLike = object
 
 
 if __name__ == "__main__":
-    for flow in sorted(FLOW_SECTION_VERSIONS):
-        v = contract_versions(flow)
-        print("=" * 78)
-        print(f"FLOW: {flow}")
-        print(f"  core    {v['core_sha256'][:16]}")
-        print(f"  section {v['section_sha256'][:16]}  ({v['flow_section_version']})")
-        print(f"  system  {v['system_sha256'][:16]}")
-        print("=" * 78)
-        print(build_system(flow))
-        print()
-
-    core_lines = len([ln for ln in core_template().splitlines() if ln.strip()])
+    v = answer_contract_versions()
+    print(f"core   {v['core_sha256'][:16]}")
+    print(f"pinned {v['pinned_sha256'][:16]}")
+    print("=" * 78)
+    print(answer_system("Jane Rivera"))
+    rules = [ln for ln in core_template().splitlines() if ln[:1].isdigit()]
     print("-" * 78)
-    print(f"core: {core_lines} non-blank lines")
-    for flow in sorted(FLOW_SECTION_VERSIONS):
-        print(f"section {flow}: {len(_read(flow_file(flow)).split())} words")
+    print(f"core: {len(rules)} numbered rules")

@@ -70,7 +70,7 @@ def main() -> None:
     # The pinned answer path: streams deltas straight to stdout so perceived latency (memo
     # section 8) is something you can watch rather than something we assert.
     write_answer = make_answer_writer(
-        provider, on_delta=lambda d: print(d, end="", flush=True)
+        provider, resolver.name_of, on_delta=lambda d: print(d, end="", flush=True)
     )
 
     coord = Coordinator(
@@ -96,8 +96,8 @@ def main() -> None:
         print("BOT: ", end="", flush=True)  # the answer streams in here
         env = coord.run_turn(thread, user_text)
         elapsed = time.perf_counter() - t0
-        if env.response_mode != "answer":
-            print(env.response, end="")  # clarify/refuse/redirect do not stream
+        if env.response_mode not in ("answer", "redirect"):
+            print(env.response, end="")  # clarify/refuse are fixed strings, not streamed
         print()
         display = strip_display_markers(env.response)
         if display != env.response:

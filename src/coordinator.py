@@ -11,21 +11,26 @@ law):
     respond round, then the turn fails loudly.
   * DUPLICATE BREAKER -- an identical (tool, args) repeat gets a structured error instead
     of a second execution; a stalled loop announces itself in the trace.
-  * BYPASS TRIPWIRE -- D-013's logic promoted to the agent era: a declared "answer" with no
-    retrieval call in the trajectory is checked by NAME SCAN -- every member name in the
-    response must trace to retrieval evidence, the user's own words, or the asker. A
-    greeting may say "welcome back"; it has no business naming a member. Violation raises;
-    zero tolerance. (Residue -- a factual claim naming nobody -- is the sampled judge's job,
-    Phase 5.)
+  * NAME SCAN -- D-013's bypass logic promoted to the agent era, and since 2026-10-12 run on
+    EVERY model-written response (answer and redirect), not only on no-retrieval answers.
+    Every member named must trace to this turn's evidence, a ResultSetArtifact or message
+    earlier in the thread, the user's own words, or the asker. The narrower first version
+    left redirect -- which by definition points at people -- able to name any member
+    unguarded. Violation raises; zero tolerance. (Residue -- a factual claim naming nobody --
+    is the sampled judge's job, Phase 5.)
   * OUTCOME VALIDATION -- clarify only ever follows an ambiguous resolution (G-001);
     refuse is the EXACT contract string (D-019's detector anchors on it); the envelope is
     validated at the end of every turn.
   * NOMINATE-VS-APPOINT (D-028) is enforced one layer down, in tools.py: the model's
     person references never become ids except through the resolver.
 
-ANSWER PATH (Step 5, done): a declared `answer` does NOT use the model's respond-text.
-It runs a SEPARATE streamed call under the pinned synth-v1 prompt (synthesize.py), over
-this turn's whole thread. Owner's call: the product is conversational, so the writer needs
+ANSWER PATH (Step 5, done): a declared `answer` or `redirect` runs a SEPARATE streamed call
+under the pinned synth-v1 prompt (synthesize.py), over this turn's whole thread. The model
+never writes user-facing text on `respond` at all: refuse is the contract string, clarify is
+Resolver.clarify_question() (D-033: a closed list of known people needs no model), and
+everything else is the pinned writer -- so every sentence a user sees is either a fixed
+string or the measured contract. (redirect originally shipped the coordinator's own text;
+the first "Hi" went out that way, asserting member facts with no citations.) Owner's call: the product is conversational, so the writer needs
 the conversation. Two consequences live here rather than in the prompt:
   * `respond` no longer asks for `text` on an answer -- the answer is written by the synth
     call, so a coordinator-written draft would be output tokens paid for and discarded
@@ -104,21 +109,18 @@ RESPOND_TOOL: dict = {
         "grounded in this conversation's evidence (put the self-contained question being "
         "answered in standalone_query); refuse when the evidence cannot support an answer; "
         "clarify ONLY after a tool reported an ambiguous person reference; redirect for "
-        "advice questions, after finding the relevant members to point at. Do NOT write the "
-        "answer text yourself for outcome=answer -- it is written separately from the "
-        "evidence you gathered. `text` is required only for clarify and redirect."
+        "advice questions, after finding the relevant members to point at. Do NOT write any "
+        "user-facing text: answers and redirects are written separately from the evidence "
+        "you gathered, and the clarify question is generated from the ambiguity itself."
     ),
     "input_schema": {
         "type": "object",
         "properties": {
             "outcome": {"type": "string",
                         "enum": ["answer", "refuse", "clarify", "redirect"]},
-            "text": {"type": "string",
-                     "description": "The user-facing message. Required for clarify and "
-                                    "redirect; omit for answer and refuse."},
             "standalone_query": {
                 "type": "string",
-                "description": "outcome=answer only: the question being answered, "
+                "description": "outcome=answer or redirect: the question being addressed, "
                                "self-contained, pronouns and ordinals resolved.",
             },
         },
@@ -128,7 +130,7 @@ RESPOND_TOOL: dict = {
 
 
 class BypassViolation(RuntimeError):
-    """A declared answer named a member with no evidence trail. Zero tolerance."""
+    """A written response named a member with no evidence trail. Zero tolerance."""
 
 
 class BudgetExhausted(RuntimeError):
@@ -184,7 +186,7 @@ class Coordinator:
                     f"no respond after {MAX_ROUNDS} rounds + forced final (thread "
                     f"{thread.thread_id})"
                 )
-            self._finalize(env, respond_args, user_text, messages, tool_menu, trc)
+            self._finalize(env, respond_args, thread, user_text, messages, tool_menu, trc)
             turn_span.set_attribute("outcome", env.response_mode or "")
             # THIS turn's rounds. The first version counted assistant messages in
             # `messages`, which carries the whole thread -- so a 2-round turn reported 8 on
@@ -310,8 +312,8 @@ class Coordinator:
 
     # --- finalization: harness law ----------------------------------------------------------
 
-    def _finalize(self, env: Envelope, args: dict, user_text: str, messages: list[dict],
-                  tool_menu: list[dict], trc) -> None:
+    def _finalize(self, env: Envelope, args: dict, thread, user_text: str,
+                  messages: list[dict], tool_menu: list[dict], trc) -> None:
         outcome = args["outcome"]
         env.response_mode = outcome
         env.resolved_query = args.get("standalone_query", "")
@@ -320,15 +322,21 @@ class Coordinator:
             # The exact contract sentence, always -- D-019's deterministic detector anchors
             # on this string; a generated paraphrase would blind it.
             env.response = REFUSAL_STRING
-        elif outcome == "answer":
+        elif outcome == "clarify":
+            # D-033: deterministic. The candidates are a closed list the resolver already
+            # holds; a model paraphrase added latency and drifted from the decided wording.
+            # No ambiguity recorded -> leave it empty and let validate() raise (G-001).
+            if env.resolution is not None and env.resolution.status == "ambiguous":
+                env.response = self.resolver.clarify_question(env.resolution)
+        else:
+            # answer and redirect: the separate pinned call. It reads the SAME messages the
+            # coordinator read, so ordinals, corrections and stated facts are available to
+            # the writer; the tool menu rides along only to satisfy the wire format.
             if self.synthesize_fn is None:
                 raise AnswerPathMissing(
-                    "declared outcome 'answer' with no synthesize_fn; wire "
-                    "synthesize.make_answer_writer(provider) before serving or scoring"
+                    f"declared outcome {outcome!r} with no synthesize_fn; wire "
+                    "synthesize.make_answer_writer(provider, name_of) before serving or scoring"
                 )
-            # The separate pinned call. It reads the SAME messages the coordinator read, so
-            # ordinals, corrections and stated facts are available to the writer; the tool
-            # menu rides along only to satisfy the wire format (tool_choice "none").
             with trc.start_as_current_span("synthesize") as span:
                 turn = self.synthesize_fn(env, messages, tool_menu)
                 record_llm_call(
@@ -339,34 +347,39 @@ class Coordinator:
                 )
                 span.set_attribute("stop_reason", turn.stop_reason)
             env.response = turn.text.strip()
-        else:
-            # clarify and redirect ARE the model's text -- there is no evidence to synthesize
-            # from, only a question to ask or people to point at.
-            text = args.get("text", "").strip()
-            if not text:
-                raise ValueError(
-                    f"outcome {outcome!r} requires text on the respond call and none was given"
-                )
-            env.response = text
-
-        if answered_without_retrieval(env):
-            self._name_scan(env, user_text)
+            self._name_scan(env, thread, user_text)
 
         validate(env)
 
-    def _name_scan(self, env: Envelope, user_text: str) -> None:
-        """Name-provenance check for the no-retrieval answer path. Deterministic and
-        universal: 268 names are a closed set, so every member name in an outgoing
-        no-retrieval answer must appear in the user's own message (echoes are honest) or
-        be the asker. Anything else is a bypass -- the answer names a member it never
-        looked up."""
-        spotted = self._member_ids(env.response)
+    def _name_scan(self, env: Envelope, thread, user_text: str) -> None:
+        """Name provenance for every model-written response. Deterministic and universal:
+        268 names are a closed set, so every member the response names must be one the turn
+        can account for -- this turn's evidence, a prior result set or message in the thread
+        (echoes of the conversation are honest), the user's own words, or the asker.
+        Anything else is a name the writer never looked up.
+
+        An AMBIGUOUS mention (a bare first name two members share) passes if ANY of its
+        candidates is accounted for: prose says "Dana" after naming Dana Whitfield, and
+        flagging the other Dana would crash a correct answer on a resolver artifact."""
         allowed = self._member_ids(user_text) | {env.asker}
-        leaked = spotted - allowed
+        allowed |= {e.person_id for e in env.corpus_evidence()}
+        for art in list(getattr(thread, "artifacts", [])) + list(env.artifacts):
+            allowed |= set(art.person_ids)
+        for m in getattr(thread, "messages", []):
+            if isinstance(m.get("content"), str):
+                allowed |= self._member_ids(m["content"])
+
+        res = self.resolver.resolve(env.response)
+        leaked = set(res.person_ids) - allowed
+        for cands in res.candidates.values():
+            if not set(cands) & allowed:
+                leaked |= set(cands)
         if leaked:
+            where = ("with no retrieval call in the trajectory"
+                     if answered_without_retrieval(env) else "outside the turn's evidence")
             raise BypassViolation(
-                f"answer names member(s) {sorted(leaked)} with no retrieval call in the "
-                f"trajectory (thread {env.thread_id})"
+                f"{env.response_mode} names member(s) {sorted(leaked)} {where} "
+                f"(thread {env.thread_id})"
             )
 
     def _member_ids(self, text: str) -> set[str]:
@@ -389,7 +402,9 @@ if __name__ == "__main__":
     from resolve import Resolver
 
     people = [{"person_id": "p-jane", "canonical_name": "Jane Rivera"},
-              {"person_id": "p-dana", "canonical_name": "Dana Whitfield"}]
+              {"person_id": "p-dana", "canonical_name": "Dana Whitfield"},
+              {"person_id": "p-dana2", "canonical_name": "Dana Exampleton"},
+              {"person_id": "p-alex", "canonical_name": "Alex Placeholder"}]
     resolver = Resolver(people)
 
     @dataclass
@@ -415,6 +430,12 @@ if __name__ == "__main__":
             return {"ok": True, "members": [{"person_id": "p-dana", "name": "Dana Whitfield",
                                              "best_score": 0.8, "snippets": [ev]}],
                     "evidence": [ev], "candidates_considered": 1}
+
+        def get_person_evidence(self, query, person_refs, full_dossier=False):
+            # Bare "Dana" is shared by two fake members -> the ambiguity the resolver reports.
+            return {"ok": False, "error": "ambiguous_person",
+                    "candidates": {"Dana": [{"person_id": "p-dana"},
+                                            {"person_id": "p-dana2"}]}}
 
     class ScriptedProvider:
         model = "fake"
@@ -507,13 +528,48 @@ if __name__ == "__main__":
     except ValueError as e:
         print(f"7. clarify precondition held: {e}")
 
-    # 8 -- clarify/redirect still owe their text; an empty one fails loudly.
-    try:
-        c, _ = coord([[ToolCallRequest("1", "respond", {"outcome": "redirect"})]])
-        c.run_turn(FakeThread(), "How should I pivot to SaaS?")
-        raise AssertionError("missing redirect text failed to fire")
-    except ValueError as e:
-        print(f"8. redirect without text rejected: {e}")
+    # 8 -- redirect is written by the pinned writer, not the coordinator.
+    c, w = coord([
+        [ToolCallRequest("1", "find_members", {"criterion": "SaaS pivot"})],
+        [ToolCallRequest("2", "respond", {"outcome": "redirect"})],
+    ], answer="Dana Whitfield has been through that pivot.")
+    env = c.run_turn(FakeThread(), "How should I pivot to SaaS?")
+    assert env.response == "Dana Whitfield has been through that pivot."
+    assert w.seen_messages is not None
+    print("8. redirect: text comes from the pinned writer")
+
+    # 8b -- the name scan now covers redirect AND answers that did retrieve: a member
+    # outside the turn's evidence raises (the live hole the first version left open).
+    for outcome in ("redirect", "answer"):
+        try:
+            c, _ = coord([
+                [ToolCallRequest("1", "find_members", {"criterion": "SaaS pivot"})],
+                [ToolCallRequest("2", "respond", {"outcome": outcome})],
+            ], answer="Alex Placeholder has done this.")
+            c.run_turn(FakeThread(), "How should I pivot to SaaS?")
+            raise AssertionError(f"{outcome}: name scan failed to fire")
+        except BypassViolation as e:
+            print(f"8b. {outcome} naming an unretrieved member rejected: {e}")
+
+    # 8c -- a bare first name shared by two members passes when one of them is accounted
+    # for; and a member named earlier in the thread is an honest echo.
+    c, _ = coord([
+        [ToolCallRequest("1", "find_members", {"criterion": "pharma"})],
+        [ToolCallRequest("2", "respond", {"outcome": "answer"})],
+    ], answer="Dana Whitfield fits. Dana also knows Alex Placeholder.")
+    t = FakeThread(messages=[{"role": "user", "content": "I met Alex Placeholder once."},
+                             {"role": "assistant", "content": "Noted."}])
+    env = c.run_turn(t, "Anyone in pharma?")
+    print("8c. ambiguous first name + thread echo pass the scan")
+
+    # 8d -- clarify is deterministic: the resolver's wording, not the model's.
+    c, _ = coord([
+        [ToolCallRequest("1", "get_person_evidence", {"query": "q", "person_refs": ["Dana"]})],
+        [ToolCallRequest("2", "respond", {"outcome": "clarify"})],
+    ])
+    env = c.run_turn(FakeThread(), "Tell me about Dana")
+    assert env.response == resolver.clarify_question(env.resolution), env.response
+    print(f"8d. clarify text is deterministic: {env.response}")
 
     # 9 -- refusal is the exact contract string regardless of anything the model wrote.
     c, _ = coord([[ToolCallRequest("1", "respond", {"outcome": "refuse",
