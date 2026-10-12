@@ -44,6 +44,10 @@ you end the turn by calling `respond`.
   in the ASKER's own profile only when they refer to themselves ("my company", "me", "we").
 - Search before you decline. Call `respond` with `refuse` only after a search came back
   without support, never on the strength of the question alone.
+- Two different kinds of "cannot answer". If the user refers to something as if it were
+  already in this conversation ("these leaders", "the first one", "him") and nothing in the
+  thread matches, ask: `respond` with outcome `clarify` and clarify_reason `missing_context`.
+  If the question is clear but the dossiers do not hold the answer, decline with `refuse`.
 - Read the whole thread. Ordinals ("the first person"), pronouns, and phrases like "the
   people you suggested" refer to earlier results in this conversation — resolve them from
   the thread, and operate on those exact person_ids.

@@ -118,7 +118,9 @@ RESPOND_TOOL: dict = {
         "End the turn with a declared outcome. outcome=answer for a substantive reply "
         "grounded in this conversation's evidence (put the self-contained question being "
         "answered in standalone_query); refuse when the evidence cannot support an answer; "
-        "clarify ONLY after a tool reported an ambiguous person reference; redirect for "
+        "clarify after a tool reported an ambiguous person reference, OR when the user "
+        "refers to something earlier in the conversation that is not there "
+        "(clarify_reason=missing_context); redirect for "
         "advice questions, after finding the relevant members to point at. Do NOT write any "
         "user-facing text: answers and redirects are written separately from the evidence "
         "you gathered, and the clarify question is generated from the ambiguity itself."
@@ -128,6 +130,10 @@ RESPOND_TOOL: dict = {
         "properties": {
             "outcome": {"type": "string",
                         "enum": ["answer", "refuse", "clarify", "redirect"]},
+            "clarify_reason": {
+                "type": "string", "enum": ["ambiguous_person", "missing_context"],
+                "description": "outcome=clarify only.",
+            },
             "standalone_query": {
                 "type": "string",
                 "description": "outcome=answer or redirect: the question being addressed, "
@@ -365,13 +371,27 @@ class Coordinator:
             # The exact contract sentence, always -- D-019's deterministic detector anchors
             # on this string; a generated paraphrase would blind it.
             env.response = REFUSAL_STRING
-        elif outcome == "clarify":
+        elif outcome == "clarify" and args.get("clarify_reason") != "missing_context":
             # D-033: deterministic. The candidates are a closed list the resolver already
             # holds; a model paraphrase added latency and drifted from the decided wording.
             # No ambiguity recorded -> leave it empty and let validate() raise (G-001).
+            env.clarify_reason = "ambiguous_person"
             if env.resolution is not None and env.resolution.status == "ambiguous":
                 env.response = self.resolver.clarify_question(env.resolution)
         else:
+            if outcome == "clarify":
+                # Missing-context clarify (owner's call, 2026-10-12). Precondition, checked
+                # against state: the thread holds NO result list. "Which of these leaders"
+                # after a list was shown is a reference to that list, not missing context.
+                # TUNABLE(no ResultSetArtifact in the thread; symptom wrong: a legit
+                #   missing-context clarify rejected because an UNRELATED list exists earlier
+                #   in a long thread -> narrow to "no artifact since the last topic change".)
+                if getattr(thread, "artifacts", None):
+                    raise ValueError("missing_context clarify while the thread holds a "
+                                     "result list; the reference has a referent")
+                env.clarify_reason = "missing_context"
+                # No closed candidate list exists, so the question is written -- by the
+                # pinned writer, like every other model-written sentence (synth rule 19).
             # answer and redirect: the separate pinned call. It reads the SAME messages the
             # coordinator read, so ordinals, corrections and stated facts are available to
             # the writer; the tool menu rides along only to satisfy the wire format.
@@ -614,6 +634,24 @@ if __name__ == "__main__":
     env = c.run_turn(FakeThread(), "Tell me about Dana")
     assert env.response == resolver.clarify_question(env.resolution), env.response
     print(f"8d. clarify text is deterministic: {env.response}")
+
+    # 8f -- missing-context clarify: legal on a thread with no result list, written by the
+    # pinned writer; illegal once a list exists (the reference has a referent).
+    c, w = coord([[ToolCallRequest("1", "respond", {"outcome": "clarify",
+                                                   "clarify_reason": "missing_context"})]],
+                 answer="I don't have an earlier list here - which leaders do you mean?")
+    env = c.run_turn(FakeThread(), "Which of these leaders raised the most?")
+    assert env.response_mode == "clarify" and env.clarify_reason == "missing_context"
+    assert env.response.startswith("I don't have an earlier list") and w.seen_messages
+    listed = FakeThread(artifacts=[ResultSetArtifact(artifact_id="rs-1", criterion="x",
+                                                     person_ids=("p-dana",))])
+    try:
+        c, _ = coord([[ToolCallRequest("1", "respond", {"outcome": "clarify",
+                                                       "clarify_reason": "missing_context"})]])
+        c.run_turn(listed, "Which of these is best?")
+        raise AssertionError("missing_context clarify with a list in the thread was allowed")
+    except ValueError as e:
+        print(f"8f. missing-context clarify written by the writer; refused with a list: {e}")
 
     # 8e -- an id the conversation never showed is rejected before any tool runs; the
     # same id taken from an earlier tool result is accepted.

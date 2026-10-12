@@ -40,7 +40,9 @@ from typing import Literal
 # Bump when the envelope's fields change; runs across versions are not comparable.
 # v2 (2026-08-11, D-036): + tool_calls (trajectory record) + artifacts (session result sets);
 # no run artifact was ever written at v1, so nothing became incomparable.
-HANDOFF_SCHEMA_VERSION = "v2"
+# v3 (2026-10-12): + clarify_reason (missing-context clarify, owner's call). Agent runs written
+# at v2 differ only in that clarify could not be declared without a person ambiguity.
+HANDOFF_SCHEMA_VERSION = "v3"
 
 # Bump when an evidence kind gains/loses/renames a field, or a kind is added/removed.
 # Versioned SEPARATELY from the envelope so adding an envelope field does not invalidate
@@ -77,6 +79,15 @@ Lane = Literal["corpus", "web", "both", "neither"]
 
 # What the response does. Fixed by the requirements memo section 4.
 ResponseMode = Literal["answer", "refuse", "clarify", "redirect"]
+
+# Why a clarify is legal. Two kinds of "cannot answer yet", owner's split (2026-10-12):
+#   ambiguous_person -- a reference matches several members (G-001); the deterministic resolver
+#                       question names the candidates.
+#   missing_context  -- the user speaks as if something were already in the conversation ("which
+#                       of these leaders", "tell me more about him") and nothing is. The user can
+#                       supply it, so ask. Contrast REFUSE: the question is clear but the
+#                       dossiers do not hold the answer -- the user cannot fix that.
+ClarifyReason = Literal["ambiguous_person", "missing_context"]
 
 # How a flow label was produced. Product-side this died with the D-026 cascade (D-036); it
 # survives for gold tooling ("rules" = deterministically derivable label, "llm" = LLM-assisted
@@ -325,6 +336,7 @@ class Envelope:
     artifacts: list[ResultSetArtifact] = field(default_factory=list)
 
     response_mode: str | None = None                # ResponseMode -- DECLARED by the coordinator
+    clarify_reason: str | None = None               # ClarifyReason; set only when mode is clarify
     response: str = ""
     # doc_ids / urls the response actually cited. The gap between this and `evidence` is the
     # residue signal the always-both TUNABLE reads, and the per-source false-refusal metric.
@@ -406,10 +418,15 @@ def validate(env: Envelope) -> None:
     if env.lane == "neither" and (env.corpus_evidence() or env.web_evidence()):
         raise ValueError("lane 'neither' carries retrieved evidence; no retrieval should have run")
 
-    # Clarify is a resolution outcome, not a synthesis choice: it may only follow ambiguity.
+    # Clarify needs a checkable reason: a recorded person ambiguity (G-001/D-016), or a
+    # declared missing-context reference (the coordinator checks the thread precondition).
     if env.response_mode == "clarify":
-        if env.resolution is None or env.resolution.status != "ambiguous":
-            raise ValueError("clarify requires resolution.status == 'ambiguous' (G-001/D-016)")
+        ambiguous = env.resolution is not None and env.resolution.status == "ambiguous"
+        if env.clarify_reason == "missing_context":
+            pass
+        elif not ambiguous:
+            raise ValueError("clarify requires resolution.status == 'ambiguous' (G-001/D-016) "
+                             "or clarify_reason == 'missing_context'")
 
 
 def answered_without_retrieval(env: Envelope) -> bool:

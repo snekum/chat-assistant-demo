@@ -180,7 +180,8 @@ def main() -> None:
         env = None
         try:
             env = coord.run_turn(thread, r["question"])
-            rec.update(outcome=env.response_mode, answer=env.response)
+            rec.update(outcome=env.response_mode, answer=env.response,
+                       clarify_reason=env.clarify_reason)
         except Exception as exc:  # harness law firing is a finding, not a crash
             rec.update(error=f"{type(exc).__name__}: {exc}", correct=False)
         rec["turn_latency_s"] = round(time.perf_counter() - t0, 3)
@@ -297,6 +298,9 @@ def summarize(results: list[dict]) -> dict:
         "correctness": correctness,
         "abstention_accuracy": binom([x["refusal_exact"] for x in abst]),
         "false_refusal_rate": binom([x["refusal_exact"] for x in answerable]),
+        # Clarify over-triggering: asking "what do you mean?" on a question it should have
+        # searched is a false refusal by another name (owner's clarify call, 2026-10-12).
+        "clarify_on_answerable": binom([x["outcome"] == "clarify" for x in answerable]),
         "refusal_judge_divergence": [x["id"] for x in results if x["refusal_exact"] is not None
                                      and x["is_refusal_judge"] is not None
                                      and x["refusal_exact"] != x["is_refusal_judge"]],
@@ -331,6 +335,7 @@ def report(run_id: str, s: dict) -> None:
     for t, m in s["correctness"].items():
         print(f"  correctness {t:<18}: {f(m)}")
     print(f"abstention accuracy: {f(s['abstention_accuracy'])} | false-refusal: {f(s['false_refusal_rate'])}")
+    print(f"clarify on answerable (over-trigger): {f(s['clarify_on_answerable'])}")
     print(f"refusal judge divergence: {s['refusal_judge_divergence']}")
     ct = s["citations"]
     print(f"citations over {ct['n_answers']}: fabricated {f(ct['fabricated_rate'])} | zero "
