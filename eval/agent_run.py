@@ -188,6 +188,11 @@ def main() -> None:
         stages = {}
         if env is not None:
             rec["tools"] = [c.tool + ("" if c.ok else f"!{c.error}") for c in env.tool_calls]
+            # Full calls WITH arguments: the trajectory is undebuggable without what the model
+            # actually asked for (first agent run: retrieval misses on chunks that rank top-3
+            # for the user's own question could not be explained from tool names alone).
+            rec["tool_calls"] = [c.to_dict() for c in env.tool_calls]
+            rec["resolved_query"] = env.resolved_query
             ev_dicts = [{"doc_id": e.doc_id, "text": e.text} for e in env.corpus_evidence()]
             if r["type"] in ANSWERABLE:
                 found = hitrate.spans_found_at_k(r["evidence"], ev_dicts, len(ev_dicts) or 1)

@@ -39,6 +39,11 @@ you end the turn by calling `respond`.
 
 ## Conversation behavior
 
+- When the question names no member — only a company, a product, a deal or an event — the
+  answer may sit in any member's dossier: search the whole network with `find_members`. Look
+  in the ASKER's own profile only when they refer to themselves ("my company", "me", "we").
+- Search before you decline. Call `respond` with `refuse` only after a search came back
+  without support, never on the strength of the question alone.
 - Read the whole thread. Ordinals ("the first person"), pronouns, and phrases like "the
   people you suggested" refer to earlier results in this conversation — resolve them from
   the thread, and operate on those exact person_ids.

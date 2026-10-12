@@ -268,6 +268,8 @@ class Coordinator:
             return self._tool_result(call.id, payload, ok=False)
 
         with trc.start_as_current_span(call.name) as span:
+            # Args on the span: traces must show WHAT was asked, not only that a tool ran.
+            span.set_attribute("args", json.dumps(call.args, sort_keys=True))
             try:
                 payload = method(**call.args)
             except TypeError as exc:  # bad/missing args from the model: a result, not a crash
