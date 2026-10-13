@@ -17,7 +17,7 @@ transformers==5.14.1
 einops==0.8.2                   # required by nomic's trust_remote_code model
 
 # --- Generation + judge (D-009 / D-010) ---
-anthropic==0.117.0
+anthropic==1.13.0
 
 # --- Traces (D-031) ---
 # Spans go to runs/<id>/trace.jsonl with NO viewer running; the OTLP exporter is only needed
@@ -30,3 +30,10 @@ opentelemetry-exporter-otlp-proto-http==1.44.0
 # --- Harness plumbing ---
 python-dotenv==1.2.2            # loads .env into os.environ (eval/run.py, judge, calibrate)
 tqdm==4.69.0                    # embed progress bar
+# --- Product agent + chat interface (D-042) ---
+langchain==1.4.5
+langchain-core==1.6.10
+langchain-anthropic==1.7.6
+langgraph==1.2.15
+langgraph-checkpoint-postgres==3.1.3
+gradio==6.30.0
