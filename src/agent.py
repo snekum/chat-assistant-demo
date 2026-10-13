@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -72,6 +73,21 @@ def _text(msg) -> str:
     if isinstance(content, str):
         return content
     return "".join(b.get("text", "") for b in content if isinstance(b, dict))
+
+
+# Display boundary (D-043): profile, [self] and [stated] tags come OFF the screen and stay in
+# the stored text. Users cannot open a dossier, so a profile citation is unverifiable clutter
+# for them; the tags exist for the system -- fabricated-citation scoring (D-020), claim-level
+# verification later, and tracing a complaint to the excerpt that produced it. [web: ...] tags
+# are kept: once web search exists they become links a user CAN check.
+_HIDDEN_TAG = re.compile(r"[ \t]*\[(?:profile:[^\]]*|self|stated)\]", re.IGNORECASE)
+
+
+def render_reply(text: str) -> str:
+    """What the member sees. Never feed this to the eval, the judge or the name check."""
+    cleaned = _HIDDEN_TAG.sub("", text)
+    lines = (re.sub(r"[ \t]{2,}", " ", line).rstrip() for line in cleaned.splitlines())
+    return "\n".join(lines).strip()
 
 
 def _shown_text(messages) -> str:
@@ -294,4 +310,11 @@ if __name__ == "__main__":
     msgs, _ = run([AIMessage(content="Still here.")], "You there?", thread="mem", saver=saver)
     assert [type(m).__name__ for m in msgs] == ["HumanMessage", "AIMessage"] * 2, msgs
     print("5. thread memory: second turn carries the first")
+    # 6 -- display: profile/self/stated tags hidden, web tags and line breaks kept.
+    raw = ("He founded it in 2021 [profile: Jane Rivera]. You met in Lagos [stated].\n\n"
+           "Your firm grew [self]. Rates rose [web: Reuters, 2026].")
+    shown = render_reply(raw)
+    assert shown == ("He founded it in 2021. You met in Lagos.\n\nYour firm grew. "
+                     "Rates rose [web: Reuters, 2026]."), shown
+    print("6. display hides profile/self/stated tags, keeps web tags and paragraphs")
     print("agent self-check passed")

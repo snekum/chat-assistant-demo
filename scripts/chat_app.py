@@ -23,8 +23,7 @@ load_dotenv(ROOT / ".env")
 
 import gradio as gr  # noqa: E402
 
-from agent import ChatService  # noqa: E402
-from synthesize import strip_display_markers  # noqa: E402
+from agent import ChatService, render_reply  # noqa: E402
 
 svc = ChatService()
 MEMBERS = svc.members()  # (display name, person_id), from the DB at runtime -- never in source
@@ -40,7 +39,7 @@ def send(message: str, history: list, person_id: str, thread_id: str):
     yield history, thread_id, ""
     try:
         for kind, text in svc.ask(thread_id, person_id, message):
-            history[-1]["content"] = f"_{text}..._" if kind == "status" else strip_display_markers(text)
+            history[-1]["content"] = f"_{text}..._" if kind == "status" else render_reply(text)
             yield history, thread_id, ""
     except Exception as exc:  # show it in the window; a demo should never die silently
         history[-1]["content"] = f"Something went wrong: {type(exc).__name__}: {exc}"
