@@ -117,7 +117,7 @@ def core_template() -> str:
 ANSWER_MAX_TOKENS = 2048
 
 
-def answer_system(asker_name: str = "") -> str:
+def answer_system(asker_name: str = "", context: str = "") -> str:
     """The system prompt the ANSWER is written under -- the pinned instrument, kept separate
     from the coordinator's prompt on purpose. A tool-description edit changes what the
     coordinator sees and must NOT change the bytes an answer was generated under, or every
@@ -131,7 +131,10 @@ def answer_system(asker_name: str = "") -> str:
     core = core_template().format(refusal_string=REFUSAL_STRING)
     if not asker_name:
         return core
-    return f"{core}\n\n## Session\nYou are speaking to: {asker_name}"
+    session = f"{core}\n\n## Session\nYou are speaking to: {asker_name}"
+    # Greeting preload (D-041): the asker's own profile summary and last topic, loaded by SQL.
+    # Same unpinned seam as the asker line -- config pins the core, not this.
+    return f"{session}\n\n{context}" if context else session
 
 
 def answer_contract_versions() -> dict[str, str]:
@@ -163,9 +166,9 @@ def make_answer_writer(provider, name_of: dict[str, str], on_delta=None):
     name_of maps person_id -> display name (Resolver.name_of).
     Returns text; the caller owns what it does with the deltas (streaming passthrough, D-037).
     """
-    def write(env, messages: list[dict], tools: list[dict]) -> ModelTurnLike:
+    def write(env, messages: list[dict], tools: list[dict], context: str = "") -> ModelTurnLike:
         return provider.stream_text(
-            answer_system(name_of.get(env.asker, "")), messages, tools=tools,
+            answer_system(name_of.get(env.asker, ""), context), messages, tools=tools,
             max_tokens=ANSWER_MAX_TOKENS, on_delta=on_delta,
         )
     return write

@@ -39,7 +39,7 @@ from synthesize import (  # noqa: E402
     make_answer_writer,
     strip_display_markers,
 )
-from tools import Toolbox, build_resolver  # noqa: E402
+from tools import Toolbox, build_resolver, build_session_brief  # noqa: E402
 from tracing import init_tracing, shutdown  # noqa: E402
 
 
@@ -79,6 +79,7 @@ def main() -> None:
         resolver=resolver,
         store=sessions,
         synthesize_fn=write_answer,
+        brief_fn=lambda a, tid: build_session_brief(conn, sessions, a, tid),
     )
     print(f"coordinator: {contract_versions()}  model: {provider.model}")
     print(f"answer path: {answer_contract_versions()}  model: {provider.synth_model}")

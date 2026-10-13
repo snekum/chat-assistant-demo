@@ -61,6 +61,7 @@ from contracts import (
     answered_without_retrieval,
     validate,
 )
+from greeting import is_pure_greeting
 from synthesize import REFUSAL_STRING
 from tracing import record_llm_call, tracer
 
@@ -161,10 +162,13 @@ class AnswerPathMissing(RuntimeError):
 
 class Coordinator:
     def __init__(self, provider, toolbox_factory: Callable, resolver, store,
-                 synthesize_fn: Callable | None = None):
+                 synthesize_fn: Callable | None = None, brief_fn: Callable | None = None):
         """toolbox_factory(asker_id) -> Toolbox (or a test double with the same three
-        tool methods). synthesize_fn(env, messages, tools) -> provider.ModelTurn is the
-        pinned synth-v1 answer path; build it with synthesize.make_answer_writer."""
+        tool methods). synthesize_fn(env, messages, tools, context="") -> provider.ModelTurn
+        is the pinned synth-v1 answer path; build it with synthesize.make_answer_writer.
+        brief_fn(asker_id, thread_id) -> {"evidence": [...], "last_topic": str | None} is the
+        greeting preload -- plain SQL, no model (tools.build_session_brief)."""
+        self.brief_fn = brief_fn
         self.provider = provider
         self.toolbox_factory = toolbox_factory
         self.resolver = resolver
@@ -194,6 +198,12 @@ class Coordinator:
         # root spans were the first thing the first real trace read got wrong.
         with trc.start_as_current_span("turn") as turn_span:
             turn_span.set_attribute("thread_id", thread.thread_id)
+            if self.synthesize_fn is not None and is_pure_greeting(user_text):
+                self._greet(env, thread, user_text, messages, tool_menu, trc)
+                turn_span.set_attribute("outcome", env.response_mode)
+                turn_span.set_attribute("rounds", 0)
+                turn_span.set_attribute("fast_path", "greeting")
+                return self._close(thread, messages, env)
             respond_args, rounds_used = self._run_rounds(
                 toolbox, env, thread, messages, system, tool_menu, seen_calls, trc)
             if respond_args is None:
@@ -210,12 +220,46 @@ class Coordinator:
             # number, so an inflated count would have overstated the loop's own cost.
             turn_span.set_attribute("rounds", rounds_used)
 
+        return self._close(thread, messages, env)
+
+    def _close(self, thread, messages: list[dict], env: Envelope) -> Envelope:
         # Close the thread record: the final text as an ordinary assistant turn -- so the
         # NEXT turn's model reads the conversation exactly as the user experienced it.
         messages.append({"role": "assistant", "content": env.response})
         thread.messages = messages
         self.store.save(thread)
         return env
+
+    # --- the one-call greeting (D-041) ------------------------------------------------------
+
+    def _greet(self, env: Envelope, thread, user_text: str, messages: list[dict],
+               tool_menu: list[dict], trc) -> None:
+        """A pure greeting skips the coordinator: ONE call, to the pinned writer, with the
+        asker's profile summary and last topic preloaded by SQL. Owner's constraint (D-041):
+        a greeting must not pay for model calls it does not need. Consequence accepted with
+        it: the greeting cannot NAME members (that needs retrieval, hence another call) -- it
+        offers angles or the last topic; names arrive on the next turn.
+
+        The preloaded profile is recorded as evidence on the envelope, so the groundedness
+        judge sees what the writer was shown (the UserStatedEvidence lesson)."""
+        brief = self.brief_fn(env.asker, thread.thread_id) if self.brief_fn else {}
+        env.evidence.extend(brief.get("evidence", []))
+        env.response_mode = "answer"
+        lines = [f"[profile: {e.doc_id}]\n{e.text}" for e in brief.get("evidence", [])]
+        context = ""
+        if lines:
+            context += "Their own profile summary (cite it as [self]):\n" + "\n".join(lines)
+        if brief.get("last_topic"):
+            context += ("\n\nTheir most recent earlier conversation was about: "
+                        f"{brief['last_topic']}")
+        with trc.start_as_current_span("synthesize") as span:
+            turn = self.synthesize_fn(env, messages, tool_menu, context=context)
+            record_llm_call(span, model=getattr(self.provider, "synth_model", "unknown"),
+                            usage=_usage(turn))
+            span.set_attribute("stop_reason", turn.stop_reason)
+        env.response = turn.text.strip()
+        self._name_scan(env, thread, user_text)
+        validate(env)
 
     def _run_rounds(self, toolbox, env, thread, messages, system, tool_menu,
                     seen_calls, trc) -> tuple[dict | None, int]:
@@ -521,15 +565,15 @@ if __name__ == "__main__":
             self.seen_messages = None
             self.seen_tools = None
 
-        def __call__(self, env, messages, tools):
-            self.seen_messages, self.seen_tools = messages, tools
+        def __call__(self, env, messages, tools, context=""):
+            self.seen_messages, self.seen_tools, self.seen_context = messages, tools, context
             return ModelTurn(text=self.text, tool_calls=(), stop_reason="end_turn",
                              input_tokens=11, output_tokens=7)
 
-    def coord(script, answer="An answer.", writer=True):
+    def coord(script, answer="An answer.", writer=True, brief_fn=None):
         w = FakeWriter(answer) if writer else None
         c = Coordinator(ScriptedProvider(script), lambda asker: FakeToolbox(),
-                        resolver, FakeStore(), synthesize_fn=w)
+                        resolver, FakeStore(), synthesize_fn=w, brief_fn=brief_fn)
         return c, w
 
     # 1 -- happy path: search, then answer. The ANSWER comes from the writer, not respond.
@@ -669,6 +713,30 @@ if __name__ == "__main__":
     env = c.run_turn(FakeThread(), "Anyone in pharma?")
     assert all(cl.ok for cl in env.tool_calls), env.tool_calls
     print("8e. invented person_id rejected; id from a tool result accepted")
+
+    # 11 -- one-call greeting: a pure greeting never reaches the coordinator (its script is
+    # EMPTY, so any coordinator call would raise), the writer gets the SQL preload, and the
+    # preloaded profile lands on the envelope for the judge.
+    def fake_brief(asker, thread_id):
+        ev = CorpusEvidence(person_id="p-jane", doc_id="Jane Rivera", chunk_id="c#1",
+                            text="Jane runs a lending startup.", score=1.0, section=1)
+        return {"evidence": [ev], "last_topic": "fintech experience"}
+    c, w = coord([], answer="Hi Jane - want to pick up the fintech search?", brief_fn=fake_brief)
+    env = c.run_turn(FakeThread(), "Hey there, good morning!")
+    assert env.response_mode == "answer" and env.response.startswith("Hi Jane")
+    assert "lending startup" in w.seen_context and "fintech experience" in w.seen_context
+    assert any(getattr(e, "chunk_id", "") == "c#1" for e in env.evidence)
+    assert env.tool_calls == []
+    print("11. pure greeting: 0 coordinator calls, 1 writer call with the SQL preload")
+
+    # 12 -- a greeting with a question in it takes the normal loop.
+    c, _ = coord([
+        [ToolCallRequest("1", "find_members", {"criterion": "fintech"})],
+        [ToolCallRequest("2", "respond", {"outcome": "answer"})],
+    ], answer="Dana Whitfield.", brief_fn=fake_brief)
+    env = c.run_turn(FakeThread(), "Hi, who knows fintech?")
+    assert [cl.tool for cl in env.tool_calls] == ["find_members"]
+    print("12. greeting + question: normal loop")
 
     # 9 -- refusal is the exact contract string regardless of anything the model wrote.
     c, _ = coord([[ToolCallRequest("1", "respond", {"outcome": "refuse",

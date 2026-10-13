@@ -24,7 +24,7 @@ wiring). find_members ranks by evidence strength alone until that fork is decide
 from __future__ import annotations
 
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 sys.path.insert(0, "src")
 import store  # noqa: E402
@@ -285,6 +285,37 @@ class Toolbox:
 # Hand-written (D-029 idiom: schema design is eval design; the trajectory eval scores calls
 # against these shapes). Descriptions are model-facing prompt surface: versioned with the
 # coordinator prompt, not tweaked casually.
+# TUNABLE(7-day recall window for the greeting's "last topic", drafted at D-038; symptom
+#   wrong: members ignore or reject the callback ("that was ages ago") -> shorten it, or
+#   require the earlier thread to have ended on an open question.)
+RECALL_WINDOW_DAYS = 7
+
+
+def build_session_brief(conn, sessions, asker: str, thread_id: str) -> dict:
+    """Greeting preload (D-041), plain SQL, no model: the asker's executive-summary chunk
+    (section 1 of their dossier, ~380 tokens) as CorpusEvidence, plus the latest find_members
+    criterion of their most recent OTHER thread if it was touched inside the recall window --
+    the C7 callback topic, read from data already on disk, no summarising and no memory
+    layer. Only the most recent earlier thread is considered: "pick up where we left off"
+    means the last conversation, not the most interesting one."""
+    ts = _now()
+    rows = store.fetch_person_chunks(conn, asker, scheme=SCHEME)[:1]
+    evidence = [CorpusEvidence(person_id=r["person_id"], doc_id=r["doc_id"],
+                               chunk_id=r["chunk_id"], text=r["text"], score=1.0, section=1,
+                               retrieved_at=ts) for r in rows]
+    last_topic = None
+    cutoff = datetime.now(timezone.utc) - timedelta(days=RECALL_WINDOW_DAYS)
+    for meta in sessions.list_for(asker, limit=5):
+        if meta["thread_id"] == thread_id:
+            continue
+        if datetime.fromisoformat(meta["updated_at"]) >= cutoff:
+            prior = sessions.load(meta["thread_id"])
+            if prior.artifacts:
+                last_topic = prior.artifacts[-1].criterion
+        break
+    return {"evidence": evidence, "last_topic": last_topic}
+
+
 # web_search is OFF the menu until Step 7 lands a provider. Advertising a tool that always
 # returns web_unavailable cost the first agent re-baseline: 13 of 59 turns spent a round on it,
 # and 3 single-hop questions about a member's own project were refused after calling ONLY the
