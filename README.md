@@ -1,13 +1,14 @@
-# Grounded RAG Q&A over long-form dossiers — with a versioned evaluation harness
+# Network Assistant — a grounded chat agent over long-form dossiers, with a versioned eval harness
 
-A retrieval-augmented question-answering system over a corpus of long-form professional
-dossiers. The emphasis of this project is **measurement**: a rigorous, versioned evaluation
-harness that can prove whether the retrieval and generation actually work — not just a pipeline
-that returns plausible text.
+A chat assistant that helps members of a private business network find and connect with other
+members. It answers only from long-form member dossiers: when the dossiers can't support an
+answer it says so, and when a question refers to something that isn't in the conversation it
+asks instead of guessing.
 
-The interesting engineering is in the eval layer: gold-blind judging, deterministic refusal and
-citation checks, a calibrated LLM-as-judge, paired statistics on a small gold set, and
-write-once run artifacts you can diff.
+The emphasis is **measurement**. Every architectural change in this repo was made against a
+versioned evaluation harness — gold-blind judging, deterministic refusal and citation checks, a
+calibrated LLM-as-judge, paired statistics on a small gold set, and write-once run artifacts you
+can diff — not on how plausible the output looked.
 
 ---
 
@@ -16,141 +17,156 @@ write-once run artifacts you can diff.
 The corpus is 268 long-form dossiers about real executives, generated from publicly available
 information. Although every fact is individually public, aggregating them into per-person
 profiles makes the collection sensitive — so **the corpus is not included in this repo** and is
-gitignored. What *is* here: all pipeline and eval code, the question-set schema and validator, a
-public schema example ([eval/questions.example.jsonl](eval/questions.example.jsonl)), and the
-**metrics-only run artifacts** (`config.json` / `summary.json` per run — the files carrying
-report text or names are withheld).
+gitignored. What *is* here: all agent, pipeline and eval code, the question-set schema and
+validator, a public schema example ([eval/questions.example.jsonl](eval/questions.example.jsonl)),
+and the **metrics-only run artifacts** (`config.json` / `summary.json` per run — files carrying
+dossier text or names are withheld).
 
-So a fresh clone can read the code, inspect the measured results, and stand up the full
-infrastructure. Reproducing a full run end-to-end additionally requires the private corpus.
+A fresh clone can read the code, inspect the measured results, and stand up the infrastructure.
+Running the assistant or a full evaluation additionally requires the private corpus.
 
 ---
 
 ## Architecture
 
 ```
-raw .md dossiers
-      │  ingest              section-header chunks (adopted via a measured A/B, D-023;
-      ▼                      name in the embedded text only); person = first-class entity
-persons.jsonl + chunks.jsonl
-      │  embed               nomic-embed-text-v1.5, 768-d, local/CPU
-      │                      disk cache keyed (model_id, role, sha256(text))
-      ▼
-Postgres + pgvector          2-table: persons + chunks; exact cosine search
-      │                      person_id PRE-filter for name-scoped retrieval
-      ▼
-retrieve top-k=3
+browser chat (Gradio)            member picker stands in for login; tool steps shown while it works
       │
       ▼
-generate                     Haiku generator; versioned "answer only from the
-      │                      reports, else refuse" contract; document-level citations
+LangChain agent                  create_agent on the LangGraph runtime
+(src/agent.py)                   · one system prompt: answer only from dossiers, exact refusal
+      │                            sentence, clarify on missing context, cite every claim
+      │                          · per-conversation memory: LangGraph Postgres checkpointer
+      │                          · guardrail hooks (code, not prompt):
+      │                              - after the model: a reply naming a member no tool returned
+      │                                is replaced with the refusal sentence before it is saved
+      │                              - inside the tools: a person_id the conversation never
+      │                                showed is rejected (the model must not construct ids)
       ▼
-answer + citations
-      │
+tools (src/tools.py)             find_members        discover members by criterion, network-wide
+      │                          get_person_evidence facts about named people / companies
       ▼
-LLM-as-judge                 Sonnet-class judge (never the generator's tier);
-                             versioned rubric; gold-blind groundedness lane +
-                             correctness lane
+resolver (src/resolve.py)        names and company mentions → person_ids, deterministically;
+      │                          an ambiguous first name becomes a clarifying question
+      ▼
+Postgres + pgvector              section-header chunks (adopted via a measured A/B, D-023),
+                                 exact cosine search, person_id pre-filter for scoped retrieval
 ```
 
-The eval harness wraps this and writes an immutable, fully config-snapshotted run per question
-set: offline retrieval metrics (hit@k, span-recall, gold-rank + MRR) always, plus online
-generation/judge metrics when an API key is present.
+Claude Haiku 4.5 runs the agent; a Sonnet-class model judges, never the same tier. Citations
+(`[profile: …]`) are kept in every stored reply — they drive fabricated-citation scoring and let
+any complaint be traced to the excerpt that produced it — but are hidden on screen, because a
+member cannot open another member's dossier to check one (D-043).
 
 ---
 
-## Measured baseline
+## Measured results
 
-Numbers are from the **section-header @ k=5 baseline-of-record** (run `20260730…-5d5bcf2`, n=59,
-clean tree; Wilson 95% intervals) — the adopted config, now with all lanes measured. The
-closed-book contamination control is config-independent (empty-context) and carried from run
-`20260726…-2158c98`. Full numbers live in each run's `summary.json`.
+Same 59-question gold set, paired by question. Wilson 95% intervals. Full numbers live in each
+run's `summary.json`.
 
-| Metric | Value | Reading |
-|---|---|---|
-| single-hop hit@1 | **0.66** [0.51, 0.78] | retrieval finds the right dossier ~2/3 of the time at k=1 |
-| single-hop hit@3 | 0.78 [0.63, 0.88] | |
-| single-hop correctness | **0.88** [0.74, 0.95] | tracks hit@k — answers are correct iff the fact was retrieved |
-| multi-hop hit@1 | **0.00** (structural) | the all-spans rule can't score hit@1 on 2-doc questions — expected; the before-picture for the routing work |
-| multi-hop span-recall@3 | 0.83 | partial credit shows progress the all-spans bar hides |
-| false-refusal rate | **0.09** | down from 0.30 under whole-doc — decomposes to ~0 real generation false-refusals; it's the retrieval miss-rate surfacing as honest "I don't know" |
-| **groundedness (primary)** | **1.00** (43/43) [0.92, 1.00] | every non-refusal answer supported by the reports alone — re-measured on section-header over 43 answers (more than whole-doc's 33, since it refuses less) |
-| closed-book correctness | **0.00** | with empty context the model refused all 47 answerable questions → correctness is retrieval-driven, not pretraining memory |
-| cost | ~$0.05 / question | Haiku generation + Sonnet judge; ~$3 for a full n=59 run |
+| Metric | Single-call pipeline | Agent (tool loop) | Reading |
+|---|---|---|---|
+| answerable correctness | 0.89 [0.77, 0.95] | **0.96** [0.86, 0.99] | 0 questions got worse, 3 got better (exact McNemar p = 0.25 — direction, not proof) |
+| false-refusal rate | 0.09 | **0.04** [0.01, 0.14] | the agent searches network-wide when a question names only a company |
+| abstention accuracy | 1.00 | 1.00 | unanswerable questions still refused |
+| **groundedness** (primary) | 1.00 [0.92, 1.00] | 0.93 [0.82, 0.98] | 3 of 45 answers flagged; the judge was calibrated on the older answer format, so re-calibration comes before treating this as a regression |
+| fabricated citations | 0 | 0 | no answer cited a dossier it was not shown |
+| cost / question (incl. judge) | ~$0.05 | ~$0.04 | |
+
+Pipeline: run `20260730T022029Z-5d5bcf2`. Agent: run `20261012T125451Z-aeae465-agent`, measured
+on the coordinator tool loop that preceded the current LangChain agent (same tools, retrieval and
+guardrails); re-measuring the LangChain agent is the next evaluation run.
+
+Retrieval (pipeline baseline): single-hop hit@1 0.66, hit@3 0.78. **Closed-book control: 0.00** —
+with empty context the model refused every answerable question, so correctness comes from
+retrieval, not from pretraining memory of these real people. **Prompt caching** cut input cost
+42% by the third turn of a conversation (each turn re-reads earlier turns at ~0.1×); it does
+nothing for single-question evals, where Haiku's 4,096-token cache minimum is never reached.
+
+---
+
+## How it evolved
+
+Each step was a recorded decision with a measured reason ([DECISIONS.md](DECISIONS.md)):
+
+1. **Single-call RAG pipeline + eval harness** (D-008–D-022). Retrieve top-k, one generation
+   call, a calibrated judge. Established the metrics before optimizing anything.
+2. **Section-header chunking** (D-023). A four-arm paired A/B: plain section chunking *lost* to
+   whole-document chunks; a decomposition arm showed the cause was context loss (sections without
+   the person's name), not corpus size — prepending the name recovered +0.20 hit@1 (p = 0.039).
+3. **Agent tool loop** (D-024–D-038). Real conversations refer back to earlier results ("the
+   first one", "anyone else among them"), which no fixed per-query workflow could enumerate, so
+   the model moved into the control seat over typed, deterministic tools. Built hand-rolled at
+   first, with a separate answer-writing call so answer quality could be measured in isolation.
+4. **Standard LangChain agent + chat interface** (D-042). Measurement showed the separate
+   answer call cost one model call per turn without improving groundedness, and the loop,
+   memory and provider plumbing were exactly what an agent framework's runtime provides. The
+   earlier rejection of LangGraph had judged it by graph size; its value is the runtime
+   (per-conversation persistence, streaming, resume, tracing), which even a one-step chatbot
+   needs. The earlier systems are kept in [src/baselines/](src/baselines/) because every recorded
+   run came from one of them.
 
 ---
 
 ## Design philosophy: no one-sided metric
 
-Every headline metric is paired with a counter-metric that catches the way the headline lies. A
-number without its counter is theatre — this pairing is the spine of the eval design.
+Every headline metric is paired with a counter-metric that catches the way the headline lies.
 
 | Headline | What it can't see alone | Counter-metric |
 |---|---|---|
 | **abstention accuracy** (correctly declined?) | a bot that refuses *everything* scores 100% | **false-refusal rate** — punishes over-refusal on answerable questions |
-| **groundedness** (supported by retrieved context?) | says nothing about whether retrieval fetched the *right* document — a fluent answer grounded in a mis-retrieved dossier passes | **correctness + hit@k**, jointly — hit@k proves the gold doc was retrieved; correctness checks the answer against gold |
-| **correctness** (matches gold?) | could be the model reciting memory of a real person, not using retrieval | **closed-book control** — same questions, empty context; came back **0.00**, so correctness is retrieval-driven |
-| **fabricated-citation rate** (cited an unseen doc?) | an answer that cites *nothing* fabricates nothing yet is untraceable | **zero-citation rate** — the sparse-citation direction |
-| **judge groundedness score** | the ruler itself can be miscalibrated or unstable | **blind human calibration + flip-rate** — the judge is measured, not trusted |
+| **groundedness** (supported by retrieved context?) | a fluent answer grounded in a mis-retrieved dossier passes | **correctness + retrieval hit**, jointly |
+| **correctness** (matches gold?) | could be the model reciting memory of a real person | **closed-book control** — same questions, empty context; came back **0.00** |
+| **fabricated-citation rate** | an answer that cites *nothing* fabricates nothing yet is untraceable | **zero-citation rate** |
+| **clarify accuracy** (asked when context was missing?) | a bot that asks "what do you mean?" all the time scores 100% | **clarify-on-answerable rate** — asking instead of searching is a false refusal by another name |
+| **judge groundedness score** | the ruler itself can be miscalibrated | **blind human calibration + flip-rate** — the judge is measured, not trusted |
 
-The refusal label that drives both abstention metrics is a deterministic string check, so a
-drifting model never sits inside the primary denominator.
+The refusal label is a deterministic string check, so a drifting model never sits inside the
+primary denominator.
 
 ---
 
 ## Key design decisions
 
-- **Section-header chunking, adopted after a measured A/B + a decomposition (D-023).** Each dossier
-  follows a fixed ~15-section template. A four-arm paired A/B tested the buried-fact hypothesis rather
-  than assuming it: *plain* section chunking **lost** to whole-doc (hit@1 0.46 vs 0.63). The
-  interesting question was *why* — context loss (name-poor sections) or corpus-size/fit? A decomposition
-  arm that prepends the person's name to the *embedded* text (stored text stays verbatim, so the scorer
-  is untouched) settled it: the name alone recovered **+0.20 hit@1 (0.46 → 0.66, p=0.039)** — so context
-  loss, not corpus size, was the cause. The header arm ties whole-doc at hit@1 and edges it at hit@3 and
-  multi-hop, and is the config that *wins* as the corpus grows (whole-doc's averaged centroids crowd
-  together at scale). Adopted at k=5 (the hit@k plateau); a generation check confirmed no regression —
-  false-refusal rate *fell* 0.30 → 0.09 and correctness *rose* 0.71 → 0.88, because both track retrieval
-  quality. Reversible via the scheme-tagged store (whole-doc is one config flag away).
-- **pgvector over a two-table schema (persons + chunks).** Keeping vectors and metadata in one
-  store enables a native *pre-filter* — resolve a name to a person, then search only that
-  person's chunks — which avoids the retrieve-then-filter failure mode of a separate vector index
-  plus metadata database (a filter can otherwise leave zero relevant results).
-- **Local embedding model behind a thin interface, with an on-disk cache.** Embeddings are cached
-  by `(model_id, role, sha256(text))`, so re-runs never re-pay the CPU embed cost; the interface
-  hides backend asymmetries so an embedder swap is a config change, not a rewrite.
-- **LLM-as-judge with a gold-blind groundedness lane.** The primary metric is scored by a judge
-  that never sees the answer key, so it measures *"supported by the retrieved reports"* rather
-  than *"true in the world."* A separate correctness lane sees the gold. The judge is a
-  higher tier than the generator, never the same model.
-- **The judge is calibrated, not trusted.** Blind human labels, adversarial planted-ungrounded
-  answers, and a repeat-run flip-rate measure it; an asymmetric trip rule forces a rubric-version
-  bump and a full re-score of history if the judge ever passes an ungrounded answer as grounded.
-- **Deterministic refusal and citation checks.** Both are string operations, so a drifting model
-  stays out of the primary metric; a fabricated citation (a cited document that was never
-  retrieved) is flagged automatically.
-- **Versioned measurement instruments.** The generation prompt contract and the judge rubric are
-  version-stamped and snapshotted into every run — two runs are only ever compared under the same
-  instrument.
-- **Write-once run artifacts with full config snapshots.** Git SHA, question-set hash, normalizer
-  version, and embedding-stack versions are pinned per run, so any metric difference between two
-  runs is explainable from the snapshots alone.
-- **Contamination control.** Because the subjects are real, a closed-book control (same questions,
-  empty context) checks that correctness comes from retrieval rather than the model's pretraining
-  memory of these people. It came back 0.00.
-- **Hand-authored, validator-checked gold set.** Abstention and multi-hop questions are
-  hand-authored (an abstention question requires *proving* the fact is absent from all 268 docs);
-  single-hop is LLM-assisted with every gold span verified against the parsed corpus. Gold is
-  anchored to document id + verbatim quote, so re-chunking can never invalidate the question set.
+- **Guardrails in code, not in the prompt.** A prompt is a request; a hook is a law. Name
+  provenance and person-id provenance are checked by code on every turn and fail safe (the reply
+  becomes the refusal sentence) rather than relying on the model to comply.
+- **Two kinds of "can't answer".** Missing *context* ("which of these leaders?" with no list
+  shown) is user-fixable, so the agent asks. Missing *data* (a clear question the dossiers don't
+  answer) is not, so it refuses with one exact sentence (D-040).
+- **Standard agent over a custom graph — for now.** A custom LangGraph graph would keep the
+  separate answer-writing step and declared outcomes; the standard agent was chosen to get a
+  usable product, with a stated condition for dropping one layer down within the same stack
+  (D-042).
+- **Section-header chunking, adopted after a measured A/B and a decomposition (D-023).**
+  Reversible via a scheme-tagged store: whole-document chunks are one config flag away.
+- **pgvector over a two-table schema (persons + chunks).** Vectors and metadata in one store
+  enable a native pre-filter — resolve a name to a person, then search only that person's
+  chunks — avoiding the retrieve-then-filter failure where a filter leaves zero results.
+- **Local embedding model with an on-disk cache** keyed by `(model_id, role, sha256(text))`, so
+  re-runs never re-pay the CPU embed cost and an embedder swap is a config change.
+- **LLM-as-judge with a gold-blind groundedness lane**, calibrated against blind human labels,
+  planted ungrounded answers and a repeat-run flip rate, with an asymmetric trip rule that forces
+  a rubric bump if the judge ever passes an ungrounded answer.
+- **Versioned measurement instruments and write-once runs.** Prompt contracts and the rubric are
+  hashed into every run with the git SHA, question-set hash and embedding-stack versions, so any
+  difference between two runs is explainable from the snapshots alone.
+- **Hand-authored, validator-checked gold set.** Abstention questions require *proving* the fact
+  is absent from all 268 dossiers; every gold span is verified against the parsed corpus and
+  anchored to document id + verbatim quote, so re-chunking can never invalidate a question.
 
 ---
 
 ## Repo layout
 
 ```
-src/       ingest → embed → store → retrieve → generate (the pipeline)
-eval/      run harness, LLM judge, hit-rate, calibration, question schema + validator
-runs/      write-once run artifacts (metrics-only files committed)
-scripts/   infra smoke check
+src/            the product: agent.py (LangChain agent), tools, resolver, store, ingest/embed
+src/baselines/  earlier systems kept runnable because every recorded eval run came from them
+prompts/        versioned prompt files, hashed into run configs
+eval/           run harnesses, LLM judge, citation parser, calibration, gold schema + validator
+runs/           write-once run artifacts (metrics-only files committed)
+scripts/        chat_app.py (the interface), infra smoke check
 ```
 
 ---
@@ -168,40 +184,33 @@ python -m venv .venv
 .venv/Scripts/pip install -r requirements.txt        # Windows
 # source .venv/bin/activate && pip install -r requirements.txt   # macOS/Linux
 
-# 3. Keys (only needed for the generation + judge lanes)
+# 3. Keys
 cp .env.example .env        # then paste your ANTHROPIC_API_KEY
 
 # 4. Verify the setup (no corpus, no paid API calls needed)
 .venv/Scripts/python scripts/smoke.py
 ```
 
-`scripts/smoke.py` proves the plumbing a fresh clone *can* check — deps import, Postgres +
-pgvector is reachable and the schema applies, the local embedder loads and returns a 768-d unit
-vector — and reports whether your `ANTHROPIC_API_KEY` is set. It never touches the corpus and
-spends nothing.
-
 ### Running (requires the private corpus in `data/raw/`)
 
 ```bash
 .venv/Scripts/python src/ingest.py            # raw .md → persons.jsonl + chunks.jsonl
 .venv/Scripts/python src/build_index.py       # embed (cached) + load into pgvector
-.venv/Scripts/python eval/run.py              # score → runs/<timestamp>-<sha>/
+.venv/Scripts/python scripts/chat_app.py      # the chat interface, at the printed local URL
+.venv/Scripts/python eval/run.py              # pipeline baseline eval → runs/<timestamp>-<sha>/
+.venv/Scripts/python eval/agent_run.py        # tool-loop baseline eval (paid: ~$2 for the full gold set)
 ```
 
-`eval/run.py` runs the offline retrieval metrics with no key; add `ANTHROPIC_API_KEY` to also run
-the generation + judge lanes. See [eval/README.md](eval/README.md) for the question schema and the
-gold-quote validator.
+Self-checks that need no API key: `python src/agent.py` (scripted model, real tools) and, from
+`src/`, `python -m baselines.coordinator`.
 
 ---
 
 ## Status
 
-The retrieval and evaluation core is complete: hardened metrics (Wilson intervals, rank/MRR
-diagnostics, per-stage cost/latency), a hand-authored and validated question set, a
-baseline-of-record, a closed-book contamination control, and a calibrated judge. The
-section-chunking A/B is done — a four-arm paired comparison that **adopted section-header chunking
-at k=5**: plain chunking lost, a name-header decomposition proved the cause was context loss (not
-corpus size), and the header arm tied/edged whole-doc while *improving* generation (false-refusal
-0.30 → 0.09, correctness 0.71 → 0.88); groundedness re-measurement on the new config is pending
-(D-023). Next up: a multi-agent routing layer (name resolution + a web-freshness lane), where
-per-person scoped retrieval becomes load-bearing, then a production-monitoring simulation.
+Working: the chat interface over the LangChain agent, with per-conversation memory, guardrail
+hooks and missing-context clarification. Measured: the pipeline and agent baselines above.
+
+Next: point the agent eval at the LangChain agent and re-measure; re-calibrate the groundedness
+judge on the agent's answer format; stream replies token by token; a web-search tool for current
+events, whose sources will be shown as links; then a production-monitoring simulation.
