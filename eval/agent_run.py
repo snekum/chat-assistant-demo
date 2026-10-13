@@ -49,20 +49,20 @@ import cost  # noqa: E402
 import hitrate  # noqa: E402
 import normalize  # noqa: E402
 import store  # noqa: E402
-from coordinator import (  # noqa: E402
+from baselines.coordinator import (  # noqa: E402
     MAX_ROUNDS,
     Coordinator,
     contract_versions as coord_versions,
 )
 from embedder import NomicLocal  # noqa: E402
-from generate import format_context  # noqa: E402
-from provider import AnthropicProvider  # noqa: E402
+from baselines.generate import format_context  # noqa: E402
+from baselines.provider import AnthropicProvider  # noqa: E402
 from run import QUESTIONS, RUNS_DIR, ANSWERABLE, git_info, sha256_file, warn_if_dirty  # noqa: E402
-from session import Thread  # noqa: E402
+from baselines.session import Thread  # noqa: E402
 from stats import wilson_interval  # noqa: E402
-from synthesize import REFUSAL_STRING, answer_contract_versions, make_answer_writer  # noqa: E402
+from baselines.synthesize import REFUSAL_STRING, answer_contract_versions, make_answer_writer  # noqa: E402
 from tools import SCHEME, Toolbox, build_resolver  # noqa: E402
-from tracing import init_tracing, shutdown  # noqa: E402
+from baselines.tracing import init_tracing, shutdown  # noqa: E402
 
 LIMIT = int(os.environ.get("EVAL_LIMIT", "0")) or None
 

@@ -106,8 +106,8 @@ def reconstruct_contexts(questions_by_qid: dict[str, str], expected_docs: dict[s
     seqscan), so reconstruction == the original context. Loads NomicLocal once (~17s). Warns if a
     reconstructed doc set diverges from the run's recorded retrieved doc_ids (would signal the DB or
     embedder changed under us)."""
-    import generate
-    from retrieve import Retriever
+    from baselines import generate
+    from baselines.retrieve import Retriever
 
     r = Retriever()
     contexts: dict[str, str] = {}
@@ -246,7 +246,7 @@ def cmd_judge_injected(run_id: str) -> None:
     """Run the Sonnet groundedness judge on each injected item FLIP_RUNS x (trip check + flip-rate).
     Also re-judges the natural multi-hop item mh-002 (a borderline real case) FLIP_RUNS x, so the
     flip-set includes a real hard case, not only synthetic ones."""
-    import generate
+    from baselines import generate
     from judge import Judge
 
     if not generate.has_credentials():

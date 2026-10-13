@@ -40,7 +40,7 @@ from dotenv import load_dotenv  # noqa: E402
 
 load_dotenv()
 
-import generate  # noqa: E402
+from baselines import generate  # noqa: E402
 from run import git_info, is_exact_refusal, sha256_file  # noqa: E402 -- reuse D-019/D-021 helpers
 from stats import wilson_interval  # noqa: E402
 

@@ -46,7 +46,7 @@ from langgraph.checkpoint.postgres import PostgresSaver
 from psycopg.rows import dict_row
 
 import store
-from synthesize import REFUSAL_STRING
+from contracts import REFUSAL_STRING
 from tools import SCHEME, Toolbox
 
 log = logging.getLogger("agent")

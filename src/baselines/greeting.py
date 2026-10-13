@@ -14,6 +14,11 @@ wrong answer. The list can be too short; it can never send a question down the g
 from __future__ import annotations
 
 import re
+from datetime import datetime, timedelta, timezone
+
+import store
+from contracts import CorpusEvidence
+from tools import SCHEME, _now
 
 _CORE = frozenset({
     "hi", "hello", "hey", "heya", "hiya", "howdy", "greetings", "yo",
@@ -38,6 +43,37 @@ def is_pure_greeting(text: str) -> bool:
         and any(t in _CORE for t in tokens)
         and all(t in _CORE or t in _FILLER for t in tokens)
     )
+
+
+# TUNABLE(7-day recall window for the greeting's "last topic", drafted at D-038; symptom
+#   wrong: members ignore or reject the callback ("that was ages ago") -> shorten it, or
+#   require the earlier thread to have ended on an open question.)
+RECALL_WINDOW_DAYS = 7
+
+
+def build_session_brief(conn, sessions, asker: str, thread_id: str) -> dict:
+    """Greeting preload (D-041), plain SQL, no model: the asker's executive-summary chunk
+    (section 1 of their dossier, ~380 tokens) as CorpusEvidence, plus the latest find_members
+    criterion of their most recent OTHER thread if it was touched inside the recall window --
+    the C7 callback topic, read from data already on disk, no summarising and no memory
+    layer. Only the most recent earlier thread is considered: "pick up where we left off"
+    means the last conversation, not the most interesting one."""
+    ts = _now()
+    rows = store.fetch_person_chunks(conn, asker, scheme=SCHEME)[:1]
+    evidence = [CorpusEvidence(person_id=r["person_id"], doc_id=r["doc_id"],
+                               chunk_id=r["chunk_id"], text=r["text"], score=1.0, section=1,
+                               retrieved_at=ts) for r in rows]
+    last_topic = None
+    cutoff = datetime.now(timezone.utc) - timedelta(days=RECALL_WINDOW_DAYS)
+    for meta in sessions.list_for(asker, limit=5):
+        if meta["thread_id"] == thread_id:
+            continue
+        if datetime.fromisoformat(meta["updated_at"]) >= cutoff:
+            prior = sessions.load(meta["thread_id"])
+            if prior.artifacts:
+                last_topic = prior.artifacts[-1].criterion
+        break
+    return {"evidence": evidence, "last_topic": last_topic}
 
 
 if __name__ == "__main__":

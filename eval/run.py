@@ -41,11 +41,11 @@ from dotenv import load_dotenv  # noqa: E402
 load_dotenv()  # read .env into os.environ (does NOT override real shell exports) -> keys visible
 
 import cost  # noqa: E402
-import generate  # noqa: E402
+from baselines import generate  # noqa: E402
 import hitrate  # noqa: E402
 import normalize  # noqa: E402
 import store  # noqa: E402
-from retrieve import DEFAULT_K, Retriever  # noqa: E402
+from baselines.retrieve import DEFAULT_K, Retriever  # noqa: E402
 from stats import wilson_interval  # noqa: E402
 
 # Override with EVAL_QUESTIONS=<path> to score a subset (e.g. a smoke-run slice) without

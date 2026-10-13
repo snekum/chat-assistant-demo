@@ -61,12 +61,12 @@ from contracts import (
     answered_without_retrieval,
     validate,
 )
-from greeting import is_pure_greeting
-from synthesize import REFUSAL_STRING
-from tracing import record_llm_call, tracer
+from baselines.greeting import is_pure_greeting
+from baselines.synthesize import REFUSAL_STRING
+from baselines.tracing import record_llm_call, tracer
 
 COORD_CONTRACT_VERSION = "coord-v1"
-PROMPT_DIR = Path(__file__).resolve().parent.parent / "prompts" / "coordinator"
+PROMPT_DIR = Path(__file__).resolve().parents[2] / "prompts" / "coordinator"
 CORE_FILE = PROMPT_DIR / "core-v1.md"
 
 # TUNABLE(5 rounds per turn: the census's worst within-turn trajectory is 2-3 tool rounds
@@ -167,7 +167,7 @@ class Coordinator:
         tool methods). synthesize_fn(env, messages, tools, context="") -> provider.ModelTurn
         is the pinned synth-v1 answer path; build it with synthesize.make_answer_writer.
         brief_fn(asker_id, thread_id) -> {"evidence": [...], "last_topic": str | None} is the
-        greeting preload -- plain SQL, no model (tools.build_session_brief)."""
+        greeting preload -- plain SQL, no model (baselines.greeting.build_session_brief)."""
         self.brief_fn = brief_fn
         self.provider = provider
         self.toolbox_factory = toolbox_factory
@@ -505,7 +505,7 @@ if __name__ == "__main__":
 
     from contracts import CorpusEvidence
     from contracts import UserStatedEvidence as USE
-    from provider import ModelTurn, ToolCallRequest
+    from baselines.provider import ModelTurn, ToolCallRequest
     from resolve import Resolver
 
     people = [{"person_id": "p-jane", "canonical_name": "Jane Rivera"},

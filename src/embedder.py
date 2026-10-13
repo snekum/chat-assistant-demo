@@ -20,7 +20,9 @@ from typing import Protocol
 
 import numpy as np
 
-CACHE_ROOT = Path("data/cache/emb")
+# Anchored to the repo root, not the working directory: a relative path silently started a
+# second, empty cache whenever a module was run from inside src/.
+CACHE_ROOT = Path(__file__).resolve().parent.parent / "data" / "cache" / "emb"
 
 # CPU-only, 268 short docs. Larger batches give little speedup and risk memory pressure.
 # TUNABLE(CPU batch; revisit if corpus-embed wall-time is painful or memory spikes)

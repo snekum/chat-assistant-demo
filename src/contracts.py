@@ -37,6 +37,11 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, field
 from typing import Literal
 
+# The exact sentence that marks a whole-answer refusal (D-019 re-anchor). Shared by the product
+# agent and the baselines, and matched by the deterministic refusal detector -- one definition,
+# so the prompt and the detector can never drift apart.
+REFUSAL_STRING = "I don't have information on that."
+
 # Bump when the envelope's fields change; runs across versions are not comparable.
 # v2 (2026-08-11, D-036): + tool_calls (trajectory record) + artifacts (session result sets);
 # no run artifact was ever written at v1, so nothing became incomparable.

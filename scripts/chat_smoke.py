@@ -30,17 +30,18 @@ from dotenv import load_dotenv  # noqa: E402
 load_dotenv(Path(__file__).resolve().parent.parent / ".env")  # repo convention (eval/run.py)
 
 import store  # noqa: E402
-from coordinator import Coordinator, contract_versions  # noqa: E402
+from baselines.coordinator import Coordinator, contract_versions  # noqa: E402
 from embedder import NomicLocal  # noqa: E402
-from provider import AnthropicProvider  # noqa: E402
-from session import SessionStore  # noqa: E402
-from synthesize import (  # noqa: E402
+from baselines.provider import AnthropicProvider  # noqa: E402
+from baselines.session import SessionStore  # noqa: E402
+from baselines.synthesize import (  # noqa: E402
     answer_contract_versions,
     make_answer_writer,
     strip_display_markers,
 )
-from tools import Toolbox, build_resolver, build_session_brief  # noqa: E402
-from tracing import init_tracing, shutdown  # noqa: E402
+from baselines.greeting import build_session_brief  # noqa: E402
+from tools import Toolbox, build_resolver  # noqa: E402
+from baselines.tracing import init_tracing, shutdown  # noqa: E402
 
 
 def main() -> None:

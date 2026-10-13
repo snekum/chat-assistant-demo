@@ -39,7 +39,7 @@ from pathlib import Path
 
 SYNTH_CONTRACT_VERSION = "synth-v1"
 
-PROMPT_DIR = Path(__file__).resolve().parent.parent / "prompts" / "synth"
+PROMPT_DIR = Path(__file__).resolve().parents[2] / "prompts" / "synth"
 
 CORE_FILE = PROMPT_DIR / "core-v1.md"
 
@@ -49,7 +49,7 @@ CORE_FILE = PROMPT_DIR / "core-v1.md"
 # detector re-points at this constant. Per-source silence emits NO string and is measured a
 # different way (retrieved-but-uncited evidence, D-029(c) consequence 3) -- so the presence of
 # this sentence still means exactly one thing, which is what keeps refusal_exact deterministic.
-REFUSAL_STRING = "I don't have information on that."
+from contracts import REFUSAL_STRING  # noqa: E402  (shared; defined once)
 
 # Asker-fact citations (D-032, owner's call: exempt WITH A MARKER). Citing a member's own profile
 # back to them by name reads absurd in conversation ("your lending startup [profile: Jane
