@@ -1,0 +1,5 @@
+#!/bin/sh
+# Git runs this automatically on every `git push` once the clone points at this folder:
+#   git config core.hooksPath scripts/hooks
+# It blocks a push whose new commits contain a real member's name (see name_guard.py).
+exec python "$(git rev-parse --show-toplevel)/scripts/hooks/name_guard.py" "$@"
