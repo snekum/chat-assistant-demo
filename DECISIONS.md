@@ -1,7 +1,9 @@
 # Architecture Decision Record
 
-This log records the architecture decisions for a retrieval-augmented Q&A system
-over long-form dossiers, together with its evaluation harness. Each entry captures
+This log records the architecture decisions for a grounded assistant over long-form
+dossiers — first a retrieval-augmented Q&A pipeline, later a conversational agent —
+together with its evaluation harness. Superseded entries are kept and marked, so the
+log reads as the system's actual evolution. Each entry captures
 the context, the options weighed, the decision, the rationale, and the condition
 that would force a revisit. Numbering begins at D-008 because earlier identifiers
 belong to a separate, parked data-preparation effort outside the scope of the
@@ -753,3 +755,799 @@ keeps whole-doc a flag away). At much larger corpus scale, re-run the arm compar
 header advantage widens as predicted. `# TUNABLE(section+name header at k=5 = the hit@k plateau;
 symptom to revert: a measured groundedness regression, or a multi-hop gold section pushed past k=5
 by one person's chunks crowding the top — then raise k or move to person-scoped retrieval.)`
+
+---
+
+## D-024: Orchestration architecture — router + workers workflow
+
+**Status.** Superseded by D-036.
+
+**Context.** Requirements were fixed before architecture: answer lanes (corpus
+named-person, corpus aggregate, web for out-of-corpus knowledge, both, neither),
+response modes (answer, refuse, clarify, redirect), session-scoped memory, and
+evidence-only retrieval returns feeding a single synthesis step. The substrate choice
+(D-025) presupposes the workflow shape, so the shape came first.
+
+**Options.**
+- A — single agent + tool loop. Cheapest and flexible on unanticipated phrasings, but never-auto-resolve (D-016) becomes a prompt hope, routing lives in model behaviour (scoreable only by trajectory evals, silently changed by model updates), and every serial tool decision costs an LLM call.
+- B — router + workers workflow. Deterministic resolver and lane router in code, per-lane retrieval flows, one synthesis step, a versioned handoff schema at the seams. Fast and parallel for known shapes; rigid on unanticipated ones, and lanes proliferate at 10x.
+- C — autonomous multi-agent. Rejected: the lanes are known and no open-ended research task exists, so autonomy adds latency and unmeasurable seams for no required capability.
+
+**Decision.** B — an orchestrator-workers workflow, not autonomous multi-agent.
+
+**Rationale.** The corpus and web paths are independent, and the anticipated
+dossier-side flows (meeting prep for one person, two-person comparison, people
+discovery, member brief) each map to an explicit step sequence. Separation of concerns
+alone would not force a workflow — tools separate concerns too. What decides it is that
+the steps per query type are known in advance, so paying a model to re-derive them per
+query buys unneeded flexibility at the cost of measurability, latency and drift.
+
+**Alternative considered (A).** A capable model with three tools covers unanticipated
+shapes for free, while every new query style is a lane to code and defend. It lost
+because the flows were known and never-auto-resolve had to live in code.
+
+**Revisit when.** A persistent class of real queries fits no lane, or lane count passes
+~6–7. D-036 acted on exactly this trigger.
+
+---
+
+## D-025: Orchestration substrate — LangGraph
+
+**Status.** Superseded by D-037, before any LangGraph code was written. The LangGraph
+runtime later returned, for different reasons, in D-042.
+
+**Context.** The workflow (D-024) needs routing on deterministic checks, a pause for
+user confirmation when a name is ambiguous with resume exactly where it stopped, and
+persistent per-thread state. A distinction set here carried forward: an LLM *as a step*
+(called by code, returning a schema-validated, scoreable label) keeps orchestration
+deterministic; an LLM *as controller* (deciding what happens next) is the tool loop
+D-024 rejected.
+
+**Options.** LangChain alone (no graph, state or interrupt primitives). The Claude Agent
+SDK (centred on the autonomous loop the design rejected). Google ADK 2.0 (an initial
+assessment that ADK lacked deterministic branching proved out of date — 2.0, GA May
+2026, added GraphAgent with conditional edges, interrupts and checkpoints). Hand-rolled
+(~200 well-understood lines, but durable interrupt/resume is the costly part).
+LangGraph.
+
+**Decision.** LangGraph, with two commitments: *thin graph, thick pure functions* —
+rules, resolver, retrieval, synthesis and validation live in plain modules with no
+framework import, so nothing a metric touches depends on the framework; and framework
+versions pinned and snapshotted into run config (D-021), since the orchestrator is part
+of the measurement instrument.
+
+**Rationale.** Routing, interrupt/resume and persistence are native to LangGraph. ADK
+now matches the capability, but its graph engine was weeks old against roughly three
+years of production history for LangGraph's checkpoint core, and fresh-churn components
+are kept out of the measurement instrument. Secondary: checkpoint replay, and fit with
+an all-Anthropic generation and judge stack.
+
+**Alternatives considered.** ADK 2.0 lost on maturity, replay and ecosystem fit;
+hand-rolled lost because two flip conditions had fired (parallel fan-out, resumable
+multi-turn state).
+
+**Revisit when.** ADK's checkpoint/interrupt machinery has about a year of stable
+releases, or a Google-stack requirement appears. Failure symptom: a framework bump
+forces graph-code rewrites.
+
+---
+
+## D-026: Routing policy — hybrid rules + LLM cascade
+
+**Status.** Superseded by D-036 — the agent architecture has no router. The LLM-as-step
+principle survives in schema-validated tool decisions, and stage attribution survives as
+per-decision trace spans.
+
+**Context.** What produces each query's lane label? D-025's step-vs-controller
+distinction makes an LLM classifier inside a deterministic router legitimate.
+
+**Options.** Rules-only (free, drift-proof, fully evaluable; brittle at the corpus-topic
+vs web boundary). LLM-only (robust, but an LLM call of latency on every query, including
+"brief me on <member>", which a name lookup routes for free). Hybrid cascade (rules take
+the unambiguous majority, an LLM step classifies the residue).
+
+**Decision.** Hybrid cascade, with both stages built up front rather than adding the LLM
+stage after measuring residue.
+
+**Rationale.** Not every query needs a model call, but natural-language queries were
+expected to leak across the topic boundary from day one, so rules alone would not
+suffice.
+
+**Alternative considered (staged build).** Adding the LLM stage only on measured residue
+is complexity-on-evidence, and "X% routes deterministically" is a number worth having —
+so the routed eval always scores stage-1-alone coverage, and every trace records which
+stage decided.
+
+**Design.** Stage 1: name/alias spotting plus unambiguous structural checks,
+deliberately minimal. Stage 2: a schema-forced label from a versioned prompt on Haiku.
+`# TUNABLE(Haiku for closed-label classification; symptom wrong: label accuracy on
+routed gold materially below the gold's own authoring agreement → bump tier before
+redesigning)`
+
+**Revisit when.** Residue ≈ 0 on real traffic, the LLM stage mislabels a class a cheap
+rule could catch, or the label distribution drifts.
+
+---
+
+## D-027: Web integration — external search API returning evidence
+
+**Context.** The web lane answers out-of-corpus questions under two constraints: workers
+return evidence only, and web evidence is never attributed to a member.
+
+**Options.** Provider server-side web search (search inside a model call, returning
+cited prose; fewest moving parts; message-level fixtures only). An external search API
+of the Tavily/Brave class (explicit request → JSON results; request/response fixtures;
+live path behind a flag). Fixtures only (perfect reproducibility, no live path).
+
+**Decision.** External search API. The provider is chosen when the web lane is built
+(JSON with URL, date and snippet; an adequate free tier; a stable API).
+
+**Rationale.** Symmetric envelopes: the corpus worker returns JSON chunks, so the web
+worker should return evidence too. Prose at the web worker plus prose at synthesis is
+double generation and extra latency; with JSON results there is exactly one generation
+step.
+
+**Alternative considered (server-side search).** No new vendor or key, and native
+citations — but it returns generated prose, re-importing double generation and blurring
+the evidence/synthesis boundary, and its fixtures are coarser.
+
+**Implementation note.** Until the web lane exists, the web tool is withheld from the
+agent behind `WEB_SEARCH_ENABLED`: the first agent baseline (D-036) had three refusals
+after the model called only the unimplemented web tool.
+
+**Revisit when.** Snippets prove too thin to ground synthesis (→ a richer API or a
+fetch-page step), or key and cost management becomes real at production traffic.
+
+---
+
+## D-028: Query decomposition — deterministic name-spotting; nominate vs appoint
+
+**Status.** Carried forward by D-036 as a harness rule at the tool layer.
+
+**Context.** Never-auto-resolve (D-016) depends on person resolution being a lookup, not
+a guess.
+
+**Decision.** Deterministic name-spotting (canonical names, surname index, company
+aliases) is the only path to a `person_id`. *Nominate vs appoint:* a model may propose
+mention strings ("the <company> guy"), but each is validated against `persons` before
+becoming a `person_id` — the model nominates, only the lookup appoints.
+
+**Rationale.** Resolution is on the critical path, and a model guessing it risks
+confidently discussing the wrong person (the D-009 reputational failure). At 268 people
+a lookup is both the safe and the cheap option.
+
+**Alternative considered (LLM decomposer now).** Handles nicknames and implicit
+references from day one. It lost because no phrasing failure had been observed and it
+puts hallucinated-person risk on the critical path.
+
+**Later hardening.** Under the agent loop, the model was seen *inventing* person_ids
+(they are name-derived, hence guessable) while the appoint step accepted any valid id,
+so it searched an unrelated member and refused. Now a raw `person_id` is accepted only
+if the conversation has already shown it (asker, tool results, user text, finished
+replies — never the model's own tool inputs). In the baseline-of-record run, which
+predates the fix, 2 of 59 turns started with an invented id.
+
+**Revisit when.** Real phrasings (nicknames, role references, misspellings) are missed →
+fuzzy matching first, then an LLM proposer — appoint-by-lookup in every variant.
+
+---
+
+## D-029: Handoff schema — envelope + typed evidence; flow classified, lane derived
+
+**Status.** Amended by D-036: the envelope survives unchanged; lane derivation moved
+from control flow to eval-side metadata on gold rows.
+
+**Context.** The routed eval scores this schema's fields and a planned citation gate
+reads it, so schema design is eval design. Implemented in `src/contracts.py`, with no
+framework import.
+
+**(a) One envelope, two strict evidence kinds** (over one loose dict, or per-seam
+contracts). `CorpusEvidence` carries person, document, chunk, section, confidence grade
+and score; `WebEvidence` carries url, title, snippet, query and dates — and has no
+`person_id` field at all. The invariant is identity scoping, not information isolation:
+the web worker may receive asker-derived attributes (an industry, a region) to shape a
+query, but never a person's identity. It prevents a wire-service claim being rendered as
+"Jane Rivera's profile notes…", and an absent field is the one thing a refactor cannot
+quietly reintroduce.
+
+**(b) Flow classified, lane derived** (over 4 or 6 predicted lanes). `Flow`
+(person_fact, comparison, brief, aggregate, topic, advice, composition, meta,
+off_domain) is the only label the router classifies; `Lane` (corpus, web, both, neither)
+is computed by `FLOW_TO_LANE`. Four lanes would hide four different retrieval paths
+under one unscored `corpus` label; six would trip D-024's proliferation trigger on day
+one; and a predicted lane would report a routing accuracy that is 100% by construction.
+Routing accuracy therefore means flow accuracy.
+
+**(c) Topic flow fans out to corpus ‖ web in parallel.** A similarity-threshold cascade
+(corpus first, web on a weak match) was ruled out by measurement: top-1 cosine spans
+0.586–0.849 for answerable questions and 0.642–0.831 for unanswerable ones — an
+unanswerable question (ex-ab-1, 0.831) outscores ~90% of answerable ones, and an
+answerable one (sh-019, 0.586) scores below every unanswerable one. Dense retrieval has
+no natural empty result, so any threshold misroutes both ways. A cascade gated on the
+measured refusal detector would pay for web only on a genuine miss, but its worst case
+is two LLM calls and a web round-trip in series. Named-person flows are corpus by
+construction, so the parallel cost lands on a narrow slice. `# TUNABLE(always-both on
+topic; symptom wrong: web evidence uncited on >70% of topic queries → predict the lane
+instead; uncited on <30% → the corpus half is dead weight)`
+
+**Consequences for synthesis.** An unsupportive source means silence on that source; the
+exact refusal string marks whole-answer refusal only; retrieved-but-uncited corpus
+evidence becomes the per-source false-refusal signal.
+
+**Revisit when.** A third evidence source appears, a flow needs a lane the table cannot
+express, or flows pass ~9–10.
+
+---
+
+## D-030: Question scope as a routing signal
+
+**Status.** Amended by D-036: with no router, the protection became a synthesis rule
+(web evidence is never framed as the network's view) plus an eval check.
+
+**Context.** Fanning a network-scoped topic question ("what do our members think
+about…") out to the web can weave non-member commentary into an answer the user reads as
+the network's view. Every existing instrument passes that answer: the web claim is
+grounded in its URL, the citation is valid, and nothing triggers the refusal detector.
+It is a "locally grounded, globally wrong" failure.
+
+**Options.** A — a synthesis rule against network framing, checked by scanning for
+framing phrases (a closed phrase list policing open-ended output). B — suppress the web
+half at routing when the question scopes itself to the network. C — a new judged
+source-appropriateness lane.
+
+**Decision.** B, with C pre-registered. The router emits `flow` plus `Scope` ∈ {network,
+open} — a property of the user's words, not a routing verdict — and `lane =
+derive_lane(flow, scope)`. Only topic flow is affected; the other eight flows have one
+possible lane. This is not lane prediction returning: D-029 removed guessing a source,
+while scope reads a source the user declared.
+
+**Rationale.** Prevention over post-hoc diagnosis: decide the source up front instead of
+fanning out and later trying to tell where the answer should have come from. The model
+supplies signals and code supplies the verdict. Scope is a scoreable envelope field, so
+the cue list is measured rather than trusted.
+
+**Alternative considered (C).** The only option that catches misuse nobody enumerated.
+It lost on sequencing: a full judge-calibration cycle before any trace showed B missing
+anything. Trigger: traces show network-scoped phrasings B missed.
+
+**Revisit when.** Scope accuracy on routed gold falls materially below flow accuracy, or
+C's trigger fires.
+
+---
+
+## D-031: Trace format — OpenTelemetry spans, confined; local viewer
+
+**Context.** Per-step traces were required from the first orchestrated build — debugging
+an agent without them is archaeology — and the same stream feeds later observability
+work and user-facing progress lines.
+
+**Options.** 1 — hand-rolled JSONL events (no dependency; a homegrown shape every viewer
+must translate). 2 — LangGraph's native stream events (near-zero effort, but the
+framework's shape, node-level only). 3 — OpenTelemetry spans with the GenAI semantic
+conventions (standard vocabulary; one dependency).
+
+**Decision.** Option 3, confined to the SDK and exporters — no collector or hosted
+backend. (An early belief that OTel needs a collector was wrong; the SDK writes files
+directly.)
+
+**Rationale.** The GenAI conventions are the standard vocabulary for LLM observability,
+and with OTel any viewer is one endpoint line, keeping the later platform choice open.
+Option 2 lost because traces become a metric source, and D-025 keeps metrics independent
+of the framework.
+
+**Design commitments.** The file is the record, the UI a lens: spans append to
+`runs/<id>/trace.jsonl`, with `TRACE_SCHEMA_VERSION` snapshotted into run config. Tokens
+only — no dollars in spans. One step vocabulary feeds the file, the viewer and progress
+lines. Tool arguments are recorded, since trajectories are undebuggable without them.
+Spans carry dossier text and subject names, so hosted trace services are ruled out and
+trace files are gitignored. Arize Phoenix was intended but would not install (a
+dependency has no Python 3.14 Windows wheel); Jaeger shipped as an optional
+docker-compose service — a one-line swap, which is what OTel bought. The code now lives
+in `src/baselines/tracing.py`.
+
+**Measured trap.** The first `query` span took 210 ms while its children summed to under
+1 ms: a synchronous span processor on the OTLP exporter was posting inside the parent
+span, counting export as work. Moving the viewer exporter to a batch processor (the file
+keeps the synchronous one for deterministic ordering) brought it to 2.87 ms.
+Instrumentation that runs inside the span it measures reports itself — check a parent's
+duration against its children before trusting a latency number.
+
+---
+
+## D-032: Synthesis contract (synth-v1) — core prompt; prompts as hashed files
+
+**Status.** Amended twice: the per-flow sections collapsed into the core (see (a)), and
+D-042 retired the separate answer-writer call from the product path, merging these rules
+into the agent prompt.
+
+**Context.** With evidence-only workers, synthesis is the system's one generation step,
+so its contract is half the measurement instrument.
+
+**(a) Core + per-flow sections** (over one prompt, or one per flow). The core holds what
+the metrics read (grounding, citations, refusal, confidence, voice); sections hold
+output shape only. Rationale: no duplicated rules and no single overlong prompt — plus
+comparability, since a version covers input bytes. Under one blended prompt, editing an
+email-drafting rule changes what a factual question receives. Sized honestly, this was
+comparability insurance, not cost (~2,511 input tokens per answer). Pre-registered tell:
+collapse if sections average under ~5 lines. **It fired** — only two sections were ever
+written (40 and 53 words), and with the router gone (D-036) nothing selected them. They
+became core rules, plus a redirect rule (advice → point at members), in one core prompt
+edited in place before any scored run.
+
+**(b) Prompts as markdown files, hashed into run config** — core, section, and the exact
+system bytes the model saw — for the same reason the question set is hashed (D-021). The
+refusal string stays a code constant interpolated into the template, so detector and
+prompt cannot drift; line endings are normalised and files are ASCII-only, so a checkout
+cannot change a hash.
+
+**(c) Contract content.**
+- Refusal: "I don't have information on that." — whole-answer only; per-source silence emits no string.
+- Citations: `[profile: <member name>]` and `[web: <publisher>, <date>]`, so the two evidence kinds are classifiable.
+- Profiles are point-in-time, so a member's current situation is phrased "as of".
+- Voice: warm, second person, conversational, length matched to the question; next steps only where evidence supports them. A "thinking partner" framing was not adopted — the product connects people, and advice questions redirect.
+- Only profile evidence establishes membership or facts about a member; a web-named person is never presented as a member. (An early draft wrongly claimed web evidence never names members.)
+- Facts about the asker are tagged `[self]` and stripped at display only. A marker, not an omission, because an uncited asker fact would look like dropped evidence in the uncited-evidence residue.
+
+**Citation parser v2** (`eval/citations.py`). `[self]` is valid only if the asker's own
+evidence was retrieved that turn; `[stated]` (user-stated facts) is counted but never
+scored fabricated; a bare `[Name]` counts as a profile citation, flagged off-contract.
+
+---
+
+## D-033: Name spotting — case-insensitive with a derived stop-list
+
+**Context.** Which strings in a free-text query are candidates for the D-028 lookup at
+all? Chat input is unreliably cased.
+
+**Measured first.** All 268 canonical names are two tokens. 35.1% of members (94) share
+a first name with someone else (the most common is shared by six), so clarify is the
+happy path, not an edge case; 5.2% (14) share a surname. 19 of 469 name tokens are also
+ordinary lowercase English words. (A first count using `[a-z]+` matched lowercase tails
+of capitalised words and inflated these several-fold; the decision used corrected
+word-boundary counts.)
+
+**Options.** A — require capitalisation (zero false positives; fails lowercase chat). B
+— case-insensitive plus a measured stop-list. C — case-insensitive with no exceptions
+(an ordinary word that is also a member's name resolves a person).
+
+**Decision.** B. Tokens that are ordinary lowercase words *and* resolve to exactly one
+member need corroboration — capitalisation or a full-name pair. Only those 15 of the 19
+are listed: a false spot on an ambiguous token lands in clarify and self-corrects, while
+one on a unique token auto-resolves to the wrong person.
+
+**Rationale.** Names must resolve in either case. The error asymmetry decides the edge:
+a missed name degrades to another flow, which is recoverable; a false name is the D-009
+reputational failure. Bias toward missing.
+
+**Alternative considered (A).** Zero false spots, and name autocomplete in the UI would
+make casing reliable. It lost because users lowercase names in a chat box.
+
+**Design commitments.** The stop-list is derived at build time (`build_stop_tokens`),
+never hard-coded — it is a list of real surnames. `# TUNABLE(corpus lowercase usage as a
+proxy for query usage; symptom wrong: a false spot on a token it missed)` Clarify text
+is deterministic (`Resolver.clarify_question()`); when the agent path was first wired it
+had drifted to model-written text and was restored. The resolver is pure (no DB,
+framework or model). Ambiguity outranks everything: answering half a comparison while
+dropping the ambiguous half is the confidently-wrong shape.
+
+**Bug from real output.** Self-reference ("me", "my") first resolved to the asker, so
+"Who can help me expand to China?" — an aggregate — targeted the asker. Fix:
+`Resolution.self_reference` marks the asker's dossier as context, not a target.
+Authenticated identity is context, not an entity to extract.
+
+**Revisit when.** A false spot slips past the list (if recurring, switch the proxy to a
+general word list or query logs), or the UI starts autocompleting names.
+
+---
+
+## D-034: Company aliases (derived, scoped); non-subject index built and dropped
+
+**Context.** Two inputs the name index cannot serve: company queries ("who at
+<company>…") and people named inside a dossier who have none of their own.
+
+**Company aliases.** Each member's *current* company only, parsed from the
+current-company header: 268/268 covered, 251 companies, 9 shared. Prior employers are
+excluded — "connected to <vendor>" usually means a supplier or client relationship, and
+aliasing every prior employer adds noise. Coverage was measured, not assumed: four
+undocumented header phrasings took it from 194 to 268, and `build_company_index()`
+returns coverage so callers can assert on it.
+
+**Governing rule.** Prompted by a review question ("shouldn't semantic search do
+this?"): semantic search finds information, but it cannot produce an id to filter on and
+cannot detect ambiguity — it always returns top-k with no confidence signal (D-029(c)).
+A deterministic index earns its place only when it produces ids or detects ambiguity;
+everything else belongs to retrieval. Company aliases qualify: a shared company would
+otherwise silently resolve to one member, and company-phrased comparisons need
+person-scoped retrieval.
+
+**Non-subject index — dropped the day it was built.** An index of non-member Key
+Personnel was arbitrary and incomplete, barely changed behaviour, and is covered by a
+simpler rule: on `not_found`, retrieve anyway and let refuse-if-absent decide. Deleting
+it exposed a bug it had masked: "Who is <non-member full name>?" fell back to a
+first-name match and asked the user to choose between two unrelated members. Fix: a
+capitalised pair that is not a member is consumed as a non-member mention, never
+partially matched.
+
+**Derived, never committed.** Both indexes hold real names, so the source carries the
+algorithm only.
+
+**Revisit when.** Company mentions fail to resolve where a prior-employer alias would
+have caught them. (A ten-way clarify on one widely shared company led to D-035.)
+
+---
+
+## D-035: Company mentions resolve to a set, never a clarify
+
+**Context.** The resolver asked a ten-way clarify for the network's umbrella
+organisation. Across the 9 shared companies, one has 10 members and eight have 2 — 9.7%
+of members — against 35.1% of members ambiguous by first name.
+
+**Options.** A — clarify at any count (never wrong; asks the user to pick between
+colleagues when they asked about the firm). B — aggregate above a threshold N (with one
+data point at 10 and eight at 2, any N from 3 to 9 is unfalsifiable). C — by mention
+type: person mentions clarify at any count; company mentions resolve to the member set.
+
+**Decision.** C.
+
+**Rationale.** Multiplicity is not ambiguity. Two members sharing a first name: the user
+meant one, and only they know which — clarify. Two members at one company: the user
+meant the company, both are correct answers, nothing is missing — clarify would answer a
+question nobody asked. True at 2 as at 10.
+
+**Consequences.** "Anything mentioning the company" is plain retrieval, which also finds
+the company in other dossiers as vendor, partner or client. The alias index serves
+company → members for scoped flows and now stands on that one justification. Large sets
+fall under the existing top-5 cap with an honest-scope statement.
+
+**Alternative considered (A).** Never returns someone the user did not ask about, keeps
+one rule for all mentions, and degrades gracefully if two different companies normalise
+identically. It lost because that case does not occur in this corpus, while a menu
+instead of an answer would hit 9.7% of members.
+
+**Revisit when.** A normalised company key maps to dossiers describing different
+businesses → clarify for that case only.
+
+---
+
+## D-036: Coordinator agent tool loop replaces the router + workers workflow
+
+**Status.** Supersedes D-024. The tool-loop architecture carries forward into D-042 on a
+standard agent runtime; the hand-rolled coordinator remains in `src/baselines/` as the
+measurement instrument.
+
+**Context.** D-024's own trigger (lane count past ~6–7) was visible at design time — the
+contracts ship nine flows — and the costliest confusions (aggregate vs topic) sit where
+rules are blind. To test rather than assume, eight representative multi-turn
+conversations were written out to map turn-to-turn dynamics, where a workflow and a loop
+actually differ. The patterns match observed usage of a comparable production chatbot.
+
+**Options.**
+- A — LLM turn-planner on the workflow spine: one schema-validated interpretation per turn, with deterministic code executing the known flows. Bounded and cheap to evaluate; D-025 survives.
+- B — coordinator agent tool loop: an LLM controller over typed deterministic tools, with invariants enforced by the harness.
+- C — build the workflow and let the routed eval's residue fire the trigger. Most rigorous, most hours.
+
+**Decision.** B.
+
+**Rationale.** The actions are few, but what should happen when in a multi-turn
+conversation is not deterministic. The workflow had enumerable flows per *query* — which
+is why D-024 was right when made — but enumeration breaks per *conversation*: the
+operations are known, while the sequence and the operand are chosen by the conversation.
+The scenarios that carried it: a vague opener where the user rejects two proposals and
+the strategy pivots (industry → adjacency → alumni affinity); follow-ups that operate on
+a prior result set ("who else among the people you suggested…", re-ranking under a
+changed criterion); repair of the bot's interpretation; recall of an earlier session's
+results.
+
+**Alternative considered (A).** One bounded, cheaply evaluable call instead of an open
+loop with costlier trajectory evals. It lost because a per-turn planner cannot react to
+intermediate results (thin retrieval, collisions, rejected proposals) without becoming
+the loop.
+
+**Dispositions.** D-026 dies (no router). D-028 becomes a harness rule: the coordinator
+nominates, only the resolver appoints, and an unresolved or ambiguous mention returns a
+structured error that steers toward clarify. The D-029 envelope is untouched; lane
+derivation becomes eval metadata; D-030's protection becomes a synthesis rule plus an
+eval check. Traces gain trajectory spans. With the LLM as controller, this is now
+genuinely an agent.
+
+**Measurement.** A separate runner (`eval/agent_run.py`) keeps the earlier runner, and
+every prior baseline, reproducible. Retrieval is scored as evidence recall (gold spans
+anywhere in the turn's tool evidence), and harness-rule exceptions score as incorrect.
+Comparisons are against the section-header baseline (D-023) on the same 59 gold rows.
+- Run 1: answerable correctness 0.79 vs 0.89, false-refusal 0.13 vs 0.09, abstention and groundedness 1.00 in both, fabricated citations 0. Paired 7 regressions vs 2 improvements, McNemar p = 0.18 — not beyond noise. Five regressions were mechanical: two name-check false positives and three refusals after calling only the unimplemented web tool.
+- Fixes: a full-name-pair name check (D-038); the web tool withheld (D-027); the coordinator prompt — with no member named, search the network, read the asker's profile only on self-reference, search before refusing (7 of 8 failures fixed on re-test); invented person_ids closed by the unseen-id rule (D-028).
+- Run 3, the agent baseline of record: answerable correctness **0.96** [0.86, 0.99] vs 0.89 (0 regressions, 3 improvements; p = 0.25, not significant); false-refusal **0.04** vs 0.09; abstention 1.00 (n=11; one row errored, see D-040); fabricated citations 0. **Groundedness 0.93** (3/45 ungrounded) vs 1.00: a premise accepted from the question (borderline), a public figure's current title asserted without retrieved support (likely parametric knowledge, the D-013 class), and a mischaracterised shareholding structure. The judge was calibrated on the earlier contract's answers, so re-calibration (D-022 protocol) is owed before 0.93 is treated as real.
+- Open: evidence recall is 0.73, yet several recall-0 multi-hop rows were judged correct and grounded — a possible mismatch between gold quotes and section-header chunk text.
+- Cost shape: $0.079 per question in a smoke run; coordinator rounds dominate through thread replay (caching: D-037).
+
+**Revisit when.** Single-turn correctness regresses beyond noise (add deterministic fast
+paths for those shapes only), or coordinator rounds dominate latency or cost beyond what
+conversational capability justifies.
+
+---
+
+## D-037: Substrate — hand-rolled loop + thin provider adapter
+
+**Status.** Superseded by D-042.
+
+**Context.** With control flow in the model (D-036), a LangGraph graph would be a single
+looping node, which — as the framework was then assessed — removed its justification. No
+LangGraph code had been written under D-025. Candidates: a LangGraph-hosted loop, a
+hand-rolled loop with a provider adapter, the Claude Agent SDK, or a pydantic-ai-class
+typed-tool framework.
+
+**Decision.** A hand-rolled loop (~150 lines), a thin provider adapter (~50 lines;
+Anthropic now, a local model as a drop-in behind the same interface), a session/artifact
+store, and streaming passthrough.
+
+**Rationale.** A one-node graph seemed to defeat the purpose of a graph framework; a
+vendor agent SDK locks in one provider when a local model must stay possible; the loop
+is small and fully customisable; and the model decides what happens when. Multi-turn
+referents ("the first person") are resolved by the model reading the replayed thread,
+token streaming comes from the provider SDK, and progress events come from the D-031
+spans. Portability is option value, not a cost driver: a Haiku coordinator round costs
+about $0.002.
+
+**Alternatives considered.** LangGraph-hosted loop — checkpointing and streaming;
+rejected because with one node its main asset seemed gone. Claude Agent SDK —
+provider-locked, and at odds with the envelope/trace/prompt-hash discipline. Pydantic-ai
+class — imports framework drift into the instrument, while everything distinctive here
+stays custom anyway.
+
+**Prompt caching.** Automatic 5-minute caching on both provider calls. Single-turn eval
+questions get no benefit: the ~1.3k-token static prefix is below Haiku 4.5's 4,096-token
+minimum, and two-round turns write then end (a ~$0.002/question write premium). In a
+three-turn chat, cache reads grow from 4.3k to 10.4k tokens per call and input cost
+falls **42%** ($0.046 vs $0.079), with the saving growing per turn. Kept on in evals to
+measure the path that ships. Because caching is prefix-matched, the separate answer
+writer can never share the coordinator's cache entry.
+
+**In hindsight** (D-042). LangGraph was judged here by node count, but its value for
+this system is the runtime — per-thread persistence, streaming, resume, tracing — which
+a single-node chatbot needs too. The custom turn-to-turn context and persistence
+plumbing was re-implementing it.
+
+**Revisit when** (as written). A real multi-provider requirement appears, or the loop
+grows framework-shaped features (checkpoint/replay, parallel sub-orchestration) past
+~300 lines.
+
+---
+
+## D-038: The social turn ("Hi") and the identity rule it exposed
+
+**Status.** Greeting mechanics revised by D-041; the separate answer writer retired from
+the product path by D-042.
+
+**Context.** In the first live smoke of the answer path, "Hi" made the coordinator
+retrieve the asker's profile, and the writer replied in the first person *as the member*
+("Hello! I'm <member name>, founder and CEO of <company>…"). What "Hi" should do had to
+be decided first.
+
+**Options.** A — greet and stop (no retrieval; cannot be wrong). B — greet plus a canned
+capability line. C — greet plus a proposal drawn from the asker's profile.
+
+**Decision.** C, as a fallback chain: (1) offer to resume an unresolved thread by name;
+else (2) offer an introduction angle from the asker's profile; else (3) a warm greeting
+by name and an invitation. Each rung degrades to the next, so the behaviour is defined
+even when nothing is known about the member.
+
+**Rationale.** The product's value is that it already knows who is asking; a generic
+"how can I help?" throws that away. So reading the asker's profile on a greeting was
+intended — the defects were in synthesis, which recited the profile instead of proposing
+from it, in the first person. Rung (1) works within a thread for free (the thread is
+replayed); across sessions it needs recall, first provided by D-041.
+
+**Alternative considered (A).** Cannot misfire — no retrieval on a contentless turn, and
+no misreading of a member's priorities from a point-in-time dossier. Rung (3) is option
+A, so the retreat path exists.
+
+**The identity rule.** The contract never said who the bot is, so a turn carrying the
+asker's own dossier (tagged `[self]`, in a second-person voice) left first person open —
+on any turn, not only greetings. New core rules: the bot speaks for the network and is
+never a member (no first-person claims about any member's company, career or
+achievements), and on a social turn it proposes rather than briefs. The writer now also
+receives the asker's name, outside the pinned bytes.
+
+**Holes closed alongside.** The greeting had shipped as a `redirect`, bypassing the
+writer with an uncited claim about the member; the coordinator now never writes
+user-facing text, so every sentence a user sees is a fixed string or the measured
+contract. The post-generation name check now covers every model-written reply — only
+names from this turn's evidence, the thread, the user's words or the asker are allowed —
+and was later narrowed to full-name pairs after false positives on surname-like words in
+prose. `# TUNABLE(full-name pairs only; symptom wrong: a violation on an answer a reader
+judges correct → inspect the stop-list before loosening)`
+
+**Citation placement.** Two runs of one prompt differed — one tag annotated its
+sentence, the other replaced the subject's name — so tags now go at sentence end and
+never substitute for a name; otherwise D-020's per-claim counts would measure something
+else.
+
+**Revisit when.** Members ignore or correct the opening proposal more often than they
+take it up (default to rung 3), or cross-session recall can be measured.
+
+---
+
+## D-039: Real-person data removed from git history
+
+**Context.** A sweep of the public repository's history against the corpus's subject
+names found real-person data that had been committed in earlier commits; it had since
+been removed from HEAD, but not from history.
+
+**Options.** A — make the repository private, rewrite, re-publish. B — rewrite history
+while public. C — accept.
+
+**Decision.** B. History was rewritten with `git filter-repo` (affected files removed
+from every commit; remaining name occurrences replaced with a redaction marker) and
+force-pushed. A re-scan of every history blob found no matches, and the HEAD tree was
+byte-identical before and after.
+
+**Rationale.** Proportionality: an in-place rewrite closes the exposure within minutes,
+so taking the repository private first would add little.
+
+**Alternative considered (A).** Going private closes the window during the rewrite
+itself; it lost because that window is minutes long.
+
+**Related hygiene.** Leftover occurrences in code comments were replaced in HEAD; the
+sweep was extended to name-derived identifier forms and history re-scanned clean; the
+asker is recorded as a hash in committed run configs; and trace files, which carry
+dossier text, are gitignored.
+
+**Since then.** The sweep became a pre-push hook (`scripts/hooks/`): every push is scanned
+for member names in any separator form and for person ids, read at run time from the
+private persons file, and blocked on a hit; it fails closed if the list is missing. It
+caught a name in an unpushed prompt example on its first run.
+
+**Revisit when.** The hook blocks a push → fix and rewrite the unpushed commit, never
+bypass.
+
+---
+
+## D-040: Clarify for missing context, refuse for missing data
+
+**Context.** In a fresh thread, "Which of these leaders has raised the most venture
+capital?" (ab-009) made the coordinator declare clarify, which the harness allowed only
+for person ambiguity, so the turn crashed.
+
+**Options.** A — clarify only for ambiguous person references. B — also clarify when the
+user presupposes conversation context that does not exist.
+
+**Decision.** B.
+
+**Rationale.** Missing *context* is user-fixable, so ask; missing *data* is not, so
+refuse.
+
+**Alternative considered (A).** Refusal is deterministic (D-019), while clarify is a
+model-written turn that can be over-triggered — asking instead of searching is a false
+refusal by another name.
+
+**Implementation.** `clarify_reason` ∈ {ambiguous_person, missing_context} on the
+respond schema and envelope (handoff schema v3). Missing-context text comes from the
+measured writer and names no member. A harness precondition forbids it while a result
+set exists in the thread (TUNABLE), and a new metric, `clarify_on_answerable`, tracks
+over-triggering. The D-042 agent has no code-level equivalent of the precondition, so
+after first live use the prompt rule was narrowed to "nothing in the conversation could
+be the referent".
+
+**Gold set.** The row was split so each tests one failure mode: ab-009 became "Which
+member of the network has raised the most venture capital?" (still a refusal), the
+original wording became clarify row cl-001, and two more clarify rows were
+hand-authored. Gold is now 62 rows (41 single-hop, 6 multi-hop, 12 abstention, 3
+clarify); the file hash changed, so the next run compares per
+question id.
+
+**Revisit when.** `clarify_on_answerable` > 0 on a full run, or users answer a
+missing-context clarify with "you know what I mean".
+
+---
+
+## D-041: One-call greeting — pure greetings skip the coordinator
+
+**Status.** Retired from the product path by D-042; it remains in the coordinator path
+(`src/baselines/`), kept as the measurement instrument. In the D-042 agent a greeting
+takes one model call because no tool is called.
+
+**Context.** A greeting — often a member's first message — should not cost several model
+calls. "Hi" cost three: the coordinator retrieved the asker's profile, read the result
+in a second round, and the separate writer wrote. Any tool call forces a second round,
+and a separate writer puts the floor at two calls.
+
+**Options.** A — a deterministic pure-greeting check skips the coordinator (one writer
+call with a SQL preload). B — the coordinator writes the greeting in round 1 (one call,
+but outside the measured writer, reopening a hole D-038 closed). C — accept two calls.
+
+**Decision.** A.
+
+**Rationale.** A contentless greeting should not spend latency and per-turn cost on
+several model calls. B needs no vocabulary and recognises any phrasing, but would put
+greeting text outside the measured contract.
+
+**Implementation.** `src/baselines/greeting.py`: every token from a greeting vocabulary,
+at least one core greeting word, at most 6 tokens — fail-safe, since a miss costs calls,
+never a wrong answer (TUNABLE). In 48 ms, `build_session_brief` loads by SQL the asker's
+executive summary (as evidence on the envelope, visible to the judge) and the latest
+search criterion from the member's most recent other thread within 7 days, as a callback
+topic — the first cross-session recall, a read of data already stored. `# TUNABLE(7-day
+window; symptom wrong: members reject the callback as stale → shorten it, or require the
+thread to have ended on an open question)` Greetings that miss the check call no tools
+(two calls, not three). A greeting cannot name other members, since that needs
+retrieval. Verified offline only.
+
+**Revisit when.** Pure greetings show up on the multi-call path (a vocabulary gap), or
+members reject the callback.
+
+---
+
+## D-042: Standard LangChain agent + chat interface now; rework when complexity grows
+
+**Status.** Supersedes D-037. Retires from the product path the separate answer writer
+(D-032), declared response outcomes, and the greeting fast path (D-041); the coordinator
+stays in `src/baselines/` as the instrument the agent baselines were cut with.
+
+**Context.** After a long design stretch there was still no interactive interface, and
+much of the code was custom plumbing for turn-to-turn context and persistence. That
+exposed the error in D-037: the earlier rejection of LangGraph judged it by graph node
+count, while its value is the runtime — per-thread persistence, streaming, resume,
+tracing — that even a single-node chatbot needs. The lesson: choose frameworks from
+requirements that will not change, start at the highest abstraction that fits, and when
+it is outgrown, drop one layer within the same stack.
+
+**Options.** A — a standard agent (`create_agent`) with guardrail hooks. B — a custom
+LangGraph graph keeping the current design. C — stay hand-rolled.
+
+**Evidence weighed.** The separate writer did not improve groundedness (1.00 with the
+earlier single-call contract vs 0.93 with it); the correctness gains came from search
+fixes (D-036); and it costs a model call per turn.
+
+**Decision.** A.
+
+**Rationale.** Reach a usable interface quickly; rework when complexity grows, not
+before.
+
+**Alternative considered (B).** Keeps measurement precision (an answer prompt isolated
+from tool-prompt edits; declared outcomes for scoring clarify). It lost because a
+product that cannot be used cannot be improved from use.
+
+**Implementation.**
+- `src/agent.py`: `create_agent` on the LangGraph runtime; Haiku 4.5 via ChatAnthropic with automatic prompt caching (not yet verified live); tools wrap the unchanged toolbox and enforce the unseen-id rule (D-028); an after-model name check swaps a leaking reply for the refusal sentence before it is saved; at most 6 model calls per turn; `PostgresSaver` checkpoints on the existing database; per-request asker context with a profile summary.
+- `prompts/agent/core-v1.md` merges the coordinator and synthesis rules.
+- `scripts/chat_app.py`: Gradio, with a member picker in place of login, status lines during tool calls, the reply shown on completion (no token streaming yet), and a New chat button.
+- Pinned: langchain 1.4.5, langgraph 1.2.15, langgraph-checkpoint-postgres 3.1.3, langchain-anthropic 1.7.6, gradio 6.30.0. The anthropic SDK moved across a major version (0.117 → 1.13); the older provider and judge paths are untested on 1.x.
+- Verified offline with a scripted model against the real database and tools: one-call greeting, search, name check, unseen-id rule, thread memory.
+- Deferred: last-topic recall in greetings, and re-pointing the eval runner (still on the coordinator) at the agent before the next measured run.
+
+**First live use.** On turn 3, "hmm maybe more about the first guy?" — after a list of
+fintech members and a turn about the fourth — the reply claimed to lack the earlier
+context, then listed the members. The prompt merge had dropped the coordinator's
+conversation rules (ordinals and pronouns resolve against earlier results; corrections;
+on a vague need, propose), and the coordinator's code-level guard against
+missing-context clarify while a result list exists has no agent equivalent. Fix: the
+rules were restored ("first" = first in the most recent list; with a plausible reading,
+take it and say so) and missing-context clarify was narrowed to "nothing in the
+conversation could be the referent". Lesson: when collapsing prompts, diff them rule by
+rule.
+
+**Revisit when.** A requirement the standard loop cannot express (a separate writer,
+declared outcomes) becomes necessary → a custom LangGraph graph in the same stack.
+
+---
+
+## D-043: Profile citations hidden on screen; kept in stored text
+
+**Context.** In the first live chat, a `[profile: <name>]` tag after every sentence read
+as clutter.
+
+**Decision.** Strip profile citation tags at the display boundary only
+(`agent.render_reply`). The tags stay in the model's output and in the stored thread,
+and the display text is never fed to the eval, the judge or the name check. Web
+citations stay visible and become links when the web lane lands.
+
+**Rationale.** A citation earns screen space only when the reader can verify it. Members
+cannot open other members' dossiers — the chat is their only view — so profile tags are
+unverifiable for them. Web citations differ: they are clickable, and they mark claims
+from outside the network (the D-030 concern).
+
+**Consequences.** The stored tags still power fabricated-citation scoring (D-020),
+future claim-level verification, and complaint tracing.
+
+**Revisit when.** Members gain a way to open the underlying profiles, at which point
+profile citations become verifiable and earn their screen space.
