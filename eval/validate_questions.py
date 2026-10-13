@@ -18,7 +18,9 @@ from normalize import quote_hits  # noqa: E402
 
 QUESTIONS = Path("eval/questions.jsonl")
 CHUNKS = Path("data/parsed/chunks.jsonl")
-TYPES = {"single-hop", "multi-hop", "abstention"}
+# clarify (D-040): the question presupposes conversation context that does not exist; the
+# correct outcome is a clarify, scored deterministically on the declared outcome.
+TYPES = {"single-hop", "multi-hop", "abstention", "clarify"}
 
 
 def load_corpus() -> dict[str, str]:
@@ -43,6 +45,11 @@ def validate_row(q: dict, corpus: dict[str, str]) -> list[str]:
     if qtype == "abstention":
         if ev:
             errs.append("abstention row must have empty evidence (answer is absent)")
+    elif qtype == "clarify":
+        if ev:
+            errs.append("clarify row must have empty evidence (nothing to retrieve yet)")
+        if not q.get("gold_answer", "").startswith("Clarify:"):
+            errs.append("clarify gold_answer must start with 'Clarify:'")
     elif qtype == "single-hop":
         if len(ev) != 1:
             errs.append(f"single-hop needs exactly 1 evidence, got {len(ev)}")

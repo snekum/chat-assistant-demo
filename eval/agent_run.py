@@ -204,11 +204,19 @@ def main() -> None:
             rec["citations"] = citations.parse(env.response, env)
             context = format_context(ev_dicts) or "(no evidence retrieved)"
             g, g_meta = judge.groundedness(r["question"], context, env.response)
-            c, c_meta = judge.correctness(r["question"], r["gold_answer"], env.response)
+            if r["type"] == "clarify":
+                # D-040: the right outcome is DECLARED, so it is scored on the declaration --
+                # no judge. Groundedness still runs: the clarify text must assert nothing.
+                c, c_meta = {"correct": env.response_mode == "clarify",
+                             "reason": f"declared {env.response_mode}"}, None
+            else:
+                c, c_meta = judge.correctness(r["question"], r["gold_answer"], env.response)
             rec.update(grounded=g["grounded"], is_refusal_judge=g["is_refusal"],
                        correct=c["correct"],
                        judge_reason={"groundedness": g["reason"], "correctness": c["reason"]})
-            stages["groundedness"], stages["correctness"] = g_meta, c_meta
+            stages["groundedness"] = g_meta
+            if c_meta:
+                stages["correctness"] = c_meta
 
         for st in ("coordinator", "synth"):
             calls = [c for c in provider.calls if c["stage"] == st]
