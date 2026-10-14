@@ -51,7 +51,7 @@ CORE_FILE = PROMPT_DIR / "core-v1.md"
 # this sentence still means exactly one thing, which is what keeps refusal_exact deterministic.
 from contracts import REFUSAL_STRING  # noqa: E402  (shared; defined once)
 
-# Asker-fact citations (D-032, owner's call: exempt WITH A MARKER). Citing a member's own profile
+# Asker-fact citations (D-032, decision: exempt WITH A MARKER). Citing a member's own profile
 # back to them by name reads absurd in conversation ("your lending startup [profile: Jane
 # Rivera]"), so rule 6 has the model tag those claims [self] instead.
 #
@@ -155,7 +155,7 @@ def make_answer_writer(provider, name_of: dict[str, str], on_delta=None):
 
     Shape of the call, and why each part is what it is:
       * system   = answer_system(asker name) -- pinned core plus the per-session asker line.
-      * messages = the turn's thread VERBATIM, including tool results. The owner's call: this
+      * messages = the turn's thread VERBATIM, including tool results. The decision: this
         is a conversational product, so the writer needs the conversation to do its job. The
         cost is that it also sees the tool scaffolding, which core rule 13 forbids it narrating.
       * tools    = re-sent with tool_choice "none". The tools are NOT for calling -- the wire

@@ -19,6 +19,8 @@ data/web_fixtures/
 eval/questions.jsonl
 # review_queue.jsonl = same content as questions.jsonl (verbatim quotes + real names) pre-merge.
 eval/review_queue.jsonl
+# recommendation-quality questions in live users' phrasing (hand-authored); private until decided
+eval/recommend_questions.jsonl
 
 # --- Run artifacts ---
 # results.jsonl carries retrieved doc text + generated answers.

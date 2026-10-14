@@ -13,7 +13,7 @@ WHY McNemar and not two independent confidence intervals (the n=45-is-tiny answe
   CIs must separate two noisy rates; McNemar only has to show the disagreements lean one way).
 
 Concordant pairs (both hit / both miss) are reported but NOT in the test -- that is the whole
-point, and the thing to say out loud in an interview.
+point, and the thing to state when presenting results.
 
 Usage:
   ./.venv/Scripts/python.exe eval/compare.py analysis/sweep_<id>.json section whole_doc

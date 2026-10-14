@@ -1,6 +1,6 @@
 """The one-call greeting (D-041): recognise a PURE greeting without a model.
 
-Owner's constraint: a greeting -- often the first thing a member ever types -- must not cost
+Product constraint: a greeting -- often the first thing a member ever types -- must not cost
 more than one model call. In a tool loop that is structurally impossible on the normal path
 (any tool forces a second round, and the answer is written by a separate pinned call), so a
 pure greeting skips the coordinator entirely and goes straight to the pinned writer, with the

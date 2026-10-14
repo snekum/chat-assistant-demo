@@ -13,7 +13,7 @@ Cross-session scope, per the census finding: this store persists threads + artif
 can list a user's prior threads. That is STATE persistence. The deferred thing stays
 deferred: no learned-preference extraction, no memory layer -- the memo §12 boundary is
 untouched. HOW a new session reaches into an old thread (auto-inject vs recall tool vs
-UI thread-resume) is an owner call still owed; every option needs exactly this store.
+UI thread-resume) is a product decision still open; every option needs exactly this store.
 
 Storage is a single jsonb-backed table in the same Postgres that holds the corpus -- one
 store, no drift (D-014's lesson applied sideways). Messages are stored in the provider
@@ -106,7 +106,7 @@ class SessionStore:
     def list_for(self, asker: str, limit: int = 10) -> list[dict]:
         """Prior threads for a member, newest first -- the C7 recall surface. Returns
         metadata only; the recall MECHANISM (auto-inject / tool / UI resume) is the
-        owner call flagged in the census, and each option starts from this list."""
+        product decision still open, and each option starts from this list."""
         with self.conn.cursor() as cur:
             cur.execute(
                 """SELECT thread_id, created_at, updated_at FROM threads

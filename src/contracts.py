@@ -45,7 +45,7 @@ REFUSAL_STRING = "I don't have information on that."
 # Bump when the envelope's fields change; runs across versions are not comparable.
 # v2 (2026-08-11, D-036): + tool_calls (trajectory record) + artifacts (session result sets);
 # no run artifact was ever written at v1, so nothing became incomparable.
-# v3 (2026-10-12): + clarify_reason (missing-context clarify, owner's call). Agent runs written
+# v3 (2026-10-12): + clarify_reason (missing-context clarify, a product decision). Agent runs written
 # at v2 differ only in that clarify could not be declared without a person ambiguity.
 HANDOFF_SCHEMA_VERSION = "v3"
 
@@ -85,7 +85,7 @@ Lane = Literal["corpus", "web", "both", "neither"]
 # What the response does. Fixed by the requirements memo section 4.
 ResponseMode = Literal["answer", "refuse", "clarify", "redirect"]
 
-# Why a clarify is legal. Two kinds of "cannot answer yet", owner's split (2026-10-12):
+# Why a clarify is legal. Two kinds of "cannot answer yet", the product split (2026-10-12):
 #   ambiguous_person -- a reference matches several members (G-001); the deterministic resolver
 #                       question names the candidates.
 #   missing_context  -- the user speaks as if something were already in the conversation ("which
@@ -198,7 +198,7 @@ class CorpusEvidence:
 class WebEvidence:
     """One external search result. NO person_id field exists here, and none may be added --
     see the module docstring. Web claims are TOPIC claims; person claims come from dossiers
-    only (census open-call 2, owner-confirmed)."""
+    only (census open-call 2, confirmed)."""
 
     url: str
     title: str

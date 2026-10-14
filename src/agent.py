@@ -1,6 +1,6 @@
 """The product agent (D-042): a standard LangChain agent on the LangGraph runtime.
 
-Owner's call, 2026-10-13: get a usable chat product now, rework when complexity actually grows.
+Decision, 2026-10-13: get a usable chat product now, rework when complexity actually grows.
 The Phase-3 coordinator (coordinator.py: separate pinned writer, declared outcomes, greeting
 fast path) stays in the repo as the measured instrument the agent baselines were cut with; this
 module is what the chat interface serves.

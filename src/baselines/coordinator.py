@@ -34,7 +34,7 @@ never writes user-facing text on `respond` at all: refuse is the contract string
 Resolver.clarify_question() (D-033: a closed list of known people needs no model), and
 everything else is the pinned writer -- so every sentence a user sees is either a fixed
 string or the measured contract. (redirect originally shipped the coordinator's own text;
-the first "Hi" went out that way, asserting member facts with no citations.) Owner's call: the product is conversational, so the writer needs
+the first "Hi" went out that way, asserting member facts with no citations.) Product decision: it is conversational, so the writer needs
 the conversation. Two consequences live here rather than in the prompt:
   * `respond` no longer asks for `text` on an answer -- the answer is written by the synth
     call, so a coordinator-written draft would be output tokens paid for and discarded
@@ -235,7 +235,7 @@ class Coordinator:
     def _greet(self, env: Envelope, thread, user_text: str, messages: list[dict],
                tool_menu: list[dict], trc) -> None:
         """A pure greeting skips the coordinator: ONE call, to the pinned writer, with the
-        asker's profile summary and last topic preloaded by SQL. Owner's constraint (D-041):
+        asker's profile summary and last topic preloaded by SQL. Product constraint (D-041):
         a greeting must not pay for model calls it does not need. Consequence accepted with
         it: the greeting cannot NAME members (that needs retrieval, hence another call) -- it
         offers angles or the last topic; names arrive on the next turn.
@@ -424,7 +424,7 @@ class Coordinator:
                 env.response = self.resolver.clarify_question(env.resolution)
         else:
             if outcome == "clarify":
-                # Missing-context clarify (owner's call, 2026-10-12). Precondition, checked
+                # Missing-context clarify (product decision, 2026-10-12). Precondition, checked
                 # against state: the thread holds NO result list. "Which of these leaders"
                 # after a list was shown is a reference to that list, not missing context.
                 # TUNABLE(no ResultSetArtifact in the thread; symptom wrong: a legit
@@ -588,7 +588,7 @@ if __name__ == "__main__":
     assert [cl.tool for cl in env.tool_calls] == ["find_members"]
     print("1. answer: text comes from the pinned writer, artifact recorded")
 
-    # 2 -- the writer is handed the THREAD and the tool menu (the owner's whole-thread call).
+    # 2 -- the writer is handed the THREAD and the tool menu (the whole-thread decision).
     assert w.seen_messages is not None and len(w.seen_messages) >= 3
     assert any(m.get("role") == "user" for m in w.seen_messages)
     assert w.seen_tools is not None, "tool menu must ride along for the wire format"

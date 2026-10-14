@@ -69,7 +69,7 @@ LIMIT = int(os.environ.get("EVAL_LIMIT", "0")) or None
 # TUNABLE($5 spend ceiling per run = the BIG-decision threshold in the working agreement; a run
 #   that would cross it stops and reports rather than spending. Estimated full run ~$2-4
 #   (coordinator+synth ~$0.012/turn measured, judge ~$0.04/q). Symptom wrong: a full run aborts
-#   near the end on a normal-looking per-question cost -> re-estimate, raise with owner sign-off.)
+#   near the end on a normal-looking per-question cost -> re-estimate, raise with explicit sign-off.)
 SPEND_CEILING_USD = float(os.environ.get("EVAL_SPEND_CEILING", "5.0"))
 
 
@@ -307,7 +307,7 @@ def summarize(results: list[dict]) -> dict:
         "abstention_accuracy": binom([x["refusal_exact"] for x in abst]),
         "false_refusal_rate": binom([x["refusal_exact"] for x in answerable]),
         # Clarify over-triggering: asking "what do you mean?" on a question it should have
-        # searched is a false refusal by another name (owner's clarify call, 2026-10-12).
+        # searched is a false refusal by another name (the clarify decision, 2026-10-12).
         "clarify_on_answerable": binom([x["outcome"] == "clarify" for x in answerable]),
         "refusal_judge_divergence": [x["id"] for x in results if x["refusal_exact"] is not None
                                      and x["is_refusal_judge"] is not None

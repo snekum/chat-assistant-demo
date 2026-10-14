@@ -18,7 +18,7 @@ on bad model input -- a raised exception would be retried by the harness, and a 
 the resolver rejects is not a transport failure.
 
 OWED, deliberately not built here: asker-personalised ranking for find_members (Step 6, behind
-the memo §11 facet fork -- an OWNER call) and §12 confidence grades on evidence (synthesis
+the memo §11 facet fork -- an open product decision) and §12 confidence grades on evidence (synthesis
 wiring). find_members ranks by evidence strength alone until that fork is decided.
 """
 from __future__ import annotations
@@ -214,7 +214,7 @@ class Toolbox:
         set (census C1/C8: "who else amongst the people you suggested…") -- pass the ids from
         the earlier result, and each is searched person-scoped so nobody drops out merely by
         losing a global ranking race. No relevance cutoff yet: the cutoff is G-004 instrument
-        design (Step 6, owner fork); until then weak tail members are visible, not hidden."""
+        design (Step 6, open design fork); until then weak tail members are visible, not hidden."""
         # Resolved like every other person argument (names as shown, or ids). Was a raw id set:
         # a NAME here excluded nobody, so "anyone else?" could re-suggest people already shown.
         excluded: set[str] = {self.asker}
@@ -303,7 +303,7 @@ class Toolbox:
         """Full name in any separator form ("Jane Rivera", "jane-rivera", "jane_rivera") or a
         raw person_id. Full-name pairs only, as in the reply name check (A12): a lone surname
         is usually an ordinary word. Known gaps: a middle initial between the names; a company
-        name that identifies a founder (D-044 steelman B)."""
+        name that identifies a founder (D-044's rejected option B)."""
         if self.resolver.full_names(text) or self.resolver.full_names(re.sub(r"[-_.]", " ", text)):
             return True
         low = text.lower()

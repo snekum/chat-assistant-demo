@@ -1,7 +1,7 @@
 """Provider adapter (D-037): the one seam between this system and any LLM vendor.
 
 The loop, tools, harness law, session store, and evals never import a vendor SDK -- they
-speak to this Protocol. Today there is one implementation (Anthropic); the owner's D-037
+speak to this Protocol. Today there is one implementation (Anthropic); D-037's
 requirement is the OPTION to swap in a local/open-source model later without touching the
 loop, so the seam exists now while it is one file wide.
 
