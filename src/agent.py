@@ -48,7 +48,7 @@ from langchain.agents.middleware import (
 from langchain.agents.middleware.types import PrivateStateAttr
 from langchain.tools import ToolRuntime, tool
 from langchain_anthropic import ChatAnthropic
-from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage, ToolMessage
 from langgraph.checkpoint.postgres import PostgresSaver
 from psycopg.rows import dict_row
 from typing_extensions import Annotated, NotRequired
@@ -401,27 +401,96 @@ class ChatService:
         return sorted((name, pid) for pid, name in self.resolver.name_of.items())
 
     def ask(self, thread_id: str, person_id: str, text: str):
-        """Yields ("status", str) while tools run, then exactly one ("reply", str)."""
+        """Yields ("status", str) while tools run, ("partial", str) as the reply streams --
+        already checked, safe to show -- then exactly one ("reply", str): the stored reply,
+        which is authoritative."""
         asker = load_asker(self.conn, self.resolver, person_id)
-        config = {"configurable": {"thread_id": thread_id}}
-        for update in self.agent.stream({"messages": [{"role": "user", "content": text}]},
-                                        config=config, context=asker, stream_mode="updates"):
-            for node in update.values():
+        yield from stream_turn(self.agent, self.resolver, thread_id, asker, text)
+
+    def links(self, thread_id: str) -> dict[str, str]:
+        """Cite key -> URL for every web result this thread has seen, for render_reply."""
+        state = self.agent.get_state({"configurable": {"thread_id": thread_id}})
+        return web_links(state.values.get("messages", []))
+
+
+# --- Streaming (D-047: first words on screen within 3 s) -------------------------------------
+
+class StreamGuard:
+    """Streams a reply to the screen without breaking the name check's promise (A5/A12): a member
+    nobody looked up is never SHOWN, not just never saved. The after-model check only runs once
+    the reply is complete -- too late for text already on screen. So the last two words stay held
+    back (a full name is two words and can arrive split across chunks), everything released has
+    been checked, and at the first unretrieved full name the stream freezes; the after-model
+    check then swaps the stored reply for the refusal sentence."""
+
+    HOLD_WORDS = 2
+
+    def __init__(self, resolver, allowed: set[str]):
+        self.resolver, self.allowed = resolver, allowed
+        self.text, self.blocked = "", False
+
+    def feed(self, chunk: str) -> str | None:
+        """-> the text that is safe to show so far, or None once blocked."""
+        if self.blocked:
+            return None
+        self.text += chunk
+        if set(self.resolver.full_names(self.text)) - self.allowed:
+            self.blocked = True
+            return None
+        words = list(re.finditer(r"\S+", self.text))
+        cut = words[-self.HOLD_WORDS].start() if len(words) > self.HOLD_WORDS else 0
+        return self.text[:cut]
+
+
+def render_partial(text: str) -> str:
+    """A reply mid-stream, for the screen: an unfinished [tag at the end is held back (it would
+    flash as raw brackets before render_reply could hide it), then the usual rendering."""
+    if text.rfind("[") > text.rfind("]"):
+        text = text[:text.rfind("[")]
+    return render_reply(text) + " ▌"
+
+
+def stream_turn(agent, resolver, thread_id: str, asker: Asker, text: str):
+    """One member message through the agent, as screen events (see ChatService.ask)."""
+    config = {"configurable": {"thread_id": thread_id}}
+    seen = list(agent.get_state(config).values.get("messages", [])) + [HumanMessage(content=text)]
+    t0, first_words = time.perf_counter(), None
+    guard, guard_id, tool_rounds = None, None, set()
+    for mode, payload in agent.stream({"messages": [{"role": "user", "content": text}]},
+                                      config=config, context=asker,
+                                      stream_mode=["updates", "messages"]):
+        if mode == "updates":
+            for node in payload.values():
                 for m in (node or {}).get("messages", []) if isinstance(node, dict) else []:
+                    seen.append(m)
                     for call in getattr(m, "tool_calls", None) or []:
                         what = call["args"].get("criterion") or call["args"].get("query") or ""
                         if call["name"] == "web_search":
                             yield "status", f"Searching the web: {what}"
                         else:
                             yield "status", f"Looking into: {what}" if what else "Looking into it"
-        final = self.agent.get_state(config).values["messages"][-1]
-        reply = _text(final) if isinstance(final, AIMessage) and not final.tool_calls else ""
-        yield "reply", reply or REFUSAL_STRING
-
-    def links(self, thread_id: str) -> dict[str, str]:
-        """Cite key -> URL for every web result this thread has seen, for render_reply."""
-        state = self.agent.get_state({"configurable": {"thread_id": thread_id}})
-        return web_links(state.values.get("messages", []))
+            continue
+        chunk, meta = payload
+        if meta.get("langgraph_node") != "model" or not isinstance(chunk, AIMessageChunk):
+            continue
+        if chunk.id and chunk.id != guard_id:     # a new model call started streaming
+            guard_id = chunk.id
+            allowed = set(resolver.full_names(_shown_text(seen))) | {asker.person_id}
+            guard = StreamGuard(resolver, allowed)
+        if chunk.tool_call_chunks:
+            tool_rounds.add(guard_id)             # a tool round: its text is not the reply
+        if guard is None or guard_id in tool_rounds:
+            continue
+        shown = guard.feed(_text(chunk))
+        if shown:
+            first_words = first_words or time.perf_counter() - t0
+            yield "partial", shown
+    final = agent.get_state(config).values["messages"][-1]
+    reply = _text(final) if isinstance(final, AIMessage) and not final.tool_calls else ""
+    # Phase-5 feed for the D-047 target (p95 first words <= 3 s on dossier turns).
+    log.info("turn timing: first words %s, full reply %.2fs",
+             f"{first_words:.2f}s" if first_words else "n/a", time.perf_counter() - t0)
+    yield "reply", reply or REFUSAL_STRING
 
 
 def web_links(messages) -> dict[str, str]:
@@ -458,6 +527,22 @@ if __name__ == "__main__":
             self.calls += 1
             self.seen.append(list(a[0]))
             return super()._generate(*a, **k)
+
+        def _stream(self, messages, stop=None, run_manager=None, **kwargs):
+            # The stock fake cannot stream a tool call. Mirror ChatAnthropic: text arrives as
+            # word chunks, a tool call as tool_call_chunks (the base class emits each token).
+            from langchain_core.outputs import ChatGenerationChunk
+
+            self.calls += 1
+            self.seen.append(list(messages))
+            msg = next(self.messages)
+            if msg.tool_calls:
+                yield ChatGenerationChunk(message=AIMessageChunk(content=msg.content, tool_call_chunks=[
+                    {"name": c["name"], "args": json.dumps(c["args"]), "id": c["id"], "index": i}
+                    for i, c in enumerate(msg.tool_calls)]))
+                return
+            for piece in re.findall(r"\S+\s*", _text(msg)):
+                yield ChatGenerationChunk(message=AIMessageChunk(content=piece))
 
     conn = store.connect()
     resolver = build_resolver(conn)
@@ -631,4 +716,35 @@ if __name__ == "__main__":
     assert [_text(m) for m in seen7[0][:len(seen6[1])]] == [_text(m) for m in seen6[1]]
     print("11. after a pause, results older than 3 turns leave the model's view (saved thread "
           "keeps them); the trimmed view stays stable so the cache works again")
+    _clock = time.time
+
+    # 12 -- streaming (D-047): the tool step shows as a status, then the reply arrives in pieces
+    # before it is complete; raw citation tags never flash on screen; the stored reply comes last.
+    answer = "Here are three people worth meeting in payments [self]. Each has scaled a business."
+    model = Scripted(messages=iter([
+        AIMessage(content="", tool_calls=[{"name": "find_members", "id": "st1",
+                                           "args": {"criterion": "fintech payments"}}]),
+        AIMessage(content=answer)]))
+    agent = build_agent(emb, conn, resolver, InMemorySaver(), model=model)
+    events = list(stream_turn(agent, resolver, "stream", asker, "Anyone in payments?"))
+    kinds = [k for k, _ in events]
+    partials = [t for k, t in events if k == "partial"]
+    assert kinds[0] == "status" and events[-1] == ("reply", answer) and len(partials) > 3, kinds
+    assert all(a == b[:len(a)] for a, b in zip(partials, partials[1:])), "partials must only grow"
+    assert not any("[" in render_partial(t) for t in partials)
+    print(f"12. reply streamed in {len(partials)} checked pieces after the tool status; "
+          "no raw tags on screen")
+
+    # 13 -- the guard under streaming: a member nobody looked up never reaches the screen, not
+    # even their first name; the stored reply is the refusal sentence. Asserts only.
+    two = next(p for p in reversed(ids) if len(resolver.name_of[p].split()) == 2)
+    leak = f"You should really meet {resolver.name_of[two]} soon, they are great."
+    model = Scripted(messages=iter([AIMessage(content=leak)]))
+    agent = build_agent(emb, conn, resolver, InMemorySaver(), model=model)
+    events = list(stream_turn(agent, resolver, "leak", asker, "Who should I meet?"))
+    shown = " ".join(t for k, t in events if k == "partial")
+    assert not any(re.search(rf"\b{re.escape(w)}\b", shown)
+                   for w in resolver.name_of[two].split()), "part of a name reached the screen"
+    assert events[-1] == ("reply", REFUSAL_STRING), events[-1]
+    print("13. an unretrieved member never reaches the screen mid-stream; stored reply = refusal")
     print("agent self-check passed")
