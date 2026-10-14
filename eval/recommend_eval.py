@@ -76,44 +76,9 @@ def score(ranked: list[str], g: dict[str, int]) -> dict:
 # (the multi-need hypothesis). Rows arrive best-first, so s[:n] are the person's top n.
 AGG = {"max": lambda s: s[0], "sum2": lambda s: sum(s[:2]), "sum3": lambda s: sum(s[:3]),
        "mean3": lambda s: sum(s[:3]) / len(s[:3])}
-# TUNABLE(the standard reciprocal-rank-fusion constant; it damps the top ranks so one list cannot
-#   dominate. Symptom wrong: hybrid ~= whichever single list it merges -> try 20 or 100.)
-RRF_K = 60
-# BM25 (Okapi) standard constants. TUNABLE(symptom wrong: long sections dominate keyword hits ->
-#   raise b; repeated words over-reward -> lower k1.)
-BM25_K1, BM25_B = 1.2, 0.75
-_STOP = set("""a an and are as at be but by can could do does for from has have he her his how i
-if in into is it its me my of on or our she should so than that the their them they this to was we
-what which who whom why will with would you your here there network members member people person
-someone anyone help""".split())
-
-
-def _tokens(text: str) -> list[str]:
-    import re
-    return [t for t in re.findall(r"[a-z0-9]+", text.lower()) if t not in _STOP and len(t) > 1]
-
-
-class BM25:
-    """Okapi BM25 over the section chunks, in memory (4,006 sections: build <1 s, query ~ms).
-    Twenty lines instead of a dependency; Postgres full-text ranking is not BM25."""
-
-    def __init__(self, docs: list[str]):
-        from collections import Counter
-        self.tf = [Counter(_tokens(d)) for d in docs]
-        self.lens = [sum(c.values()) for c in self.tf]
-        self.avg = sum(self.lens) / len(self.lens)
-        df = Counter(t for c in self.tf for t in c)
-        n = len(docs)
-        self.idf = {t: math.log(1 + (n - k + 0.5) / (k + 0.5)) for t, k in df.items()}
-
-    def scores(self, query: str) -> list[float]:
-        terms = set(_tokens(query))
-        out = []
-        for c, length in zip(self.tf, self.lens):
-            norm = BM25_K1 * (1 - BM25_B + BM25_B * length / self.avg)
-            out.append(sum(self.idf[t] * c[t] * (BM25_K1 + 1) / (c[t] + norm)
-                           for t in terms if t in c))
-        return out
+# BM25, tokenizer and fusion are the PRODUCT's (src/hybrid.py): one implementation, so the
+# eval measures exactly what members get.
+from hybrid import BM25, keyword_index, rank_people, rrf as _rrf  # noqa: E402,F401
 
 
 def _dense_people(conn, emb, question: str) -> dict[str, list[float]]:
@@ -129,14 +94,6 @@ def _rank(scores: dict[str, float]) -> list[str]:
     return sorted(scores, key=lambda p: -scores[p])
 
 
-def _rrf(*rankings: list[str]) -> list[str]:
-    fused: dict[str, float] = defaultdict(float)
-    for ranking in rankings:
-        for i, p in enumerate(ranking):
-            fused[p] += 1 / (RRF_K + i + 1)
-    return _rank(fused)
-
-
 def method_dense(conn, emb, agg: str = "max"):
     """Meaning-based search; agg "max" is today's member search (find_members' ordering,
     extended past its 5-person cap so recall@k can look deeper)."""
@@ -148,10 +105,7 @@ def method_dense(conn, emb, agg: str = "max"):
 def method_bm25(conn, emb):
     """Keyword search alone (diagnostic): a person = their best-matching section by BM25."""
     from tools import SCHEME
-    with conn.cursor() as cur:
-        cur.execute("SELECT person_id, text FROM chunks WHERE chunk_scheme = %s", (SCHEME,))
-        rows = cur.fetchall()
-    index, section_people = BM25([r[1] for r in rows]), [r[0] for r in rows]
+    index, _, section_people = keyword_index(conn, SCHEME)
     everyone = sorted(set(section_people))
 
     def rank(question: str) -> list[str]:
@@ -163,7 +117,11 @@ def method_bm25(conn, emb):
 
 
 def method_hybrid(conn, emb, agg: str = "max"):
-    """Keyword + meaning, merged by reciprocal rank fusion."""
+    """Keyword + meaning, merged by reciprocal rank fusion. agg "sum3" IS the shipped product
+    ranking (src/hybrid.rank_people, D-051); other aggs compose the same primitives."""
+    from tools import SCHEME
+    if agg == "sum3":
+        return lambda q: rank_people(conn, emb.embed_query(q), q, SCHEME)[0]
     dense, keyword = method_dense(conn, emb, agg), method_bm25(conn, emb)
     return lambda question: _rrf(dense(question), keyword(question))
 

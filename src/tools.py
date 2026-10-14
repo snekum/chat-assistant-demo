@@ -31,6 +31,7 @@ from datetime import datetime, timezone
 sys.path.insert(0, "src")
 import store  # noqa: E402
 from aliases import alias_stop_terms, build_company_index  # noqa: E402
+import hybrid  # noqa: E402
 import web  # noqa: E402
 from contracts import CorpusEvidence  # noqa: E402
 from resolve import Resolver, build_stop_tokens  # noqa: E402
@@ -40,6 +41,11 @@ log = logging.getLogger("tools")
 # Adopted retrieval config (D-023): section_hdr @ k=5. The whole_doc scheme is RETAINED and
 # serves the brief flow (full_dossier=True) -- the two schemes coexist in one DB by design.
 SCHEME = "section_hdr"
+
+# Member discovery ranking (D-051): True = hybrid (meaning + keyword, src/hybrid.py); False rolls
+# back to the single-best-section ranking. Shipped on product judgement: the measured gain sat on
+# drafted questions, not the 10 real ones -- re-check against more real questions.
+HYBRID_SEARCH = True
 
 # TUNABLE(5 chunks per person, the D-023 section_hdr hit@k plateau; symptom wrong: comparison
 #         answers missing facts the dossier holds -> check rank 6+ in traces before raising)
@@ -228,6 +234,8 @@ class Toolbox:
 
         per_person: dict[str, list[CorpusEvidence]] = {}
         if within_person_ids is not None:
+            # Narrowing a list the member already saw: every listed person is searched
+            # person-scoped, so nobody drops out by losing a global ranking race.
             ids, err = self._appoint(within_person_ids)
             if err:
                 return err
@@ -237,7 +245,17 @@ class Toolbox:
                 rows = store.search(self.conn, qvec, k=SNIPPETS_PER_MEMBER,
                                     person_id=pid, scheme=SCHEME)
                 per_person[pid] = [self._as_evidence(r, ts) for r in rows]
+            ranked = sorted(per_person.items(), key=lambda kv: -max(e.score for e in kv[1]))
+            considered = len(per_person)
+        elif HYBRID_SEARCH:
+            order, sections = hybrid.rank_people(
+                self.conn, qvec, criterion, SCHEME, keep=lambda p: p not in excluded,
+                top=TOP_N_MEMBERS, per_person=SNIPPETS_PER_MEMBER)
+            ranked = [(pid, [self._as_evidence(r, ts) for r in sections[pid]])
+                      for pid in order[:TOP_N_MEMBERS]]
+            considered = len(order)
         else:
+            # Pre-D-051 ranking (the rollback path): a person = their single best section.
             for row in store.search(self.conn, qvec, k=SWEEP_K, scheme=SCHEME):
                 pid = row["person_id"]
                 if pid in excluded:
@@ -245,11 +263,9 @@ class Toolbox:
                 bucket = per_person.setdefault(pid, [])
                 if len(bucket) < SNIPPETS_PER_MEMBER:
                     bucket.append(self._as_evidence(row, ts))
+            ranked = sorted(per_person.items(), key=lambda kv: -max(e.score for e in kv[1]))
+            considered = len(per_person)
 
-        # Evidence strength = best supporting chunk. Deliberately the dumbest ranking that
-        # still measures; coverage bonuses / asker-fit reordering arrive with the Step-6 fork,
-        # pulled by the G-004 instrument's numbers rather than pushed by design taste.
-        ranked = sorted(per_person.items(), key=lambda kv: -max(e.score for e in kv[1]))
         members = [
             {
                 "person_id": pid,
@@ -263,7 +279,7 @@ class Toolbox:
             "ok": True,
             "members": members,
             "evidence": [e for m in members for e in m["snippets"]],
-            "candidates_considered": len(per_person),
+            "candidates_considered": considered,
         }
 
     def web_search(self, query: str, kind: str = "news") -> dict:

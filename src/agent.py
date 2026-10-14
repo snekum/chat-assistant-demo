@@ -53,6 +53,7 @@ from langgraph.checkpoint.postgres import PostgresSaver
 from psycopg.rows import dict_row
 from typing_extensions import Annotated, NotRequired
 
+import hybrid
 import store
 from contracts import REFUSAL_STRING
 from tools import SCHEME, WEB_SEARCH_ENABLED, Toolbox
@@ -395,6 +396,7 @@ class ChatService:
         self.resolver = build_resolver(self.conn)
         self.emb = NomicLocal()
         self.emb.warm()  # model load at startup, not on the first question (Step-5 finding)
+        hybrid.keyword_index(self.conn, SCHEME)  # D-051 keyword index, also built once up front
         self.agent = build_agent(self.emb, self.conn, self.resolver, open_checkpointer())
 
     def members(self) -> list[tuple[str, str]]:
