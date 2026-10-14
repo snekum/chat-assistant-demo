@@ -10,6 +10,9 @@ data/parsed/
 data/cache/
 data/deep_research_reports
 data/mapping
+# recorded web search responses (src/web.py): outgoing queries may carry company names; kept
+# local until publishing them is decided
+data/web_fixtures/
 
 # --- Eval gold set: contains verbatim corpus quotes + personal facts ---
 # (schema/rigor is shown publicly via eval/questions.example.jsonl instead)

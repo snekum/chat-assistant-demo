@@ -23,14 +23,19 @@ wiring). find_members ranks by evidence strength alone until that fork is decide
 """
 from __future__ import annotations
 
+import logging
+import re
 import sys
 from datetime import datetime, timezone
 
 sys.path.insert(0, "src")
 import store  # noqa: E402
 from aliases import alias_stop_terms, build_company_index  # noqa: E402
+import web  # noqa: E402
 from contracts import CorpusEvidence  # noqa: E402
 from resolve import Resolver, build_stop_tokens  # noqa: E402
+
+log = logging.getLogger("tools")
 
 # Adopted retrieval config (D-023): section_hdr @ k=5. The whole_doc scheme is RETAINED and
 # serves the brief flow (full_dossier=True) -- the two schemes coexist in one DB by design.
@@ -210,8 +215,14 @@ class Toolbox:
         the earlier result, and each is searched person-scoped so nobody drops out merely by
         losing a global ranking race. No relevance cutoff yet: the cutoff is G-004 instrument
         design (Step 6, owner fork); until then weak tail members are visible, not hidden."""
-        excluded = set(exclude_person_ids or ())
-        excluded.add(self.asker)
+        # Resolved like every other person argument (names as shown, or ids). Was a raw id set:
+        # a NAME here excluded nobody, so "anyone else?" could re-suggest people already shown.
+        excluded: set[str] = {self.asker}
+        if exclude_person_ids:
+            ids, err = self._appoint(exclude_person_ids)
+            if err:
+                return err
+            excluded.update(ids)
         qvec = self.emb.embed_query(criterion)
         ts = _now()
 
@@ -255,18 +266,48 @@ class Toolbox:
             "candidates_considered": len(per_person),
         }
 
-    def web_search(self, query: str) -> dict:
-        """Out-of-corpus knowledge (D-027: external search API returning typed results).
-        Provider lands at Step 7 with recorded fixtures; until then the tool EXISTS and
-        degrades honestly, so trajectories and schemas are real from day one."""
-        return {
-            "ok": False,
-            "error": "web_unavailable",
-            "detail": "Web search is not configured. Answer from corpus evidence or state "
-                      "plainly that current external information is unavailable.",
-        }
+    def web_search(self, query: str, kind: str = "news") -> dict:
+        """Out-of-corpus knowledge (D-027: external search API returning typed results,
+        provider in web.py). Failure degrades honestly to web_unavailable, never a crash.
+
+        EGRESS CHECK (D-044): a query naming a member never leaves the system. Member facts
+        come only from dossiers, which the internal team keeps current, so the web has nothing
+        to add about a member -- and the query is the one place member data could reach a
+        third party. Checked here, below the agent and the coordinator alike, so no prompt
+        change can route around it."""
+        if self._names_member(query):
+            log.warning("web_search blocked: the query named a member")  # never log the name
+            return {
+                "ok": False,
+                "error": "member_name_in_query",
+                "detail": "Search queries may not contain member names: member facts come only "
+                          "from dossiers (use get_person_evidence). Search the topic itself, "
+                          "without the name.",
+            }
+        try:
+            results = web.search(query, kind)
+        except web.WebSearchError as exc:
+            log.warning("web_search unavailable: %s", exc)
+            return {
+                "ok": False,
+                "error": "web_unavailable",
+                "detail": "Web search is not available right now. Answer from member "
+                          "evidence, or say plainly that current outside information is "
+                          "unavailable.",
+            }
+        return {"ok": True, "results": results, "evidence": results}
 
     # --- helpers ----------------------------------------------------------------------------
+
+    def _names_member(self, text: str) -> bool:
+        """Full name in any separator form ("Jane Rivera", "jane-rivera", "jane_rivera") or a
+        raw person_id. Full-name pairs only, as in the reply name check (A12): a lone surname
+        is usually an ordinary word. Known gaps: a middle initial between the names; a company
+        name that identifies a founder (D-044 steelman B)."""
+        if self.resolver.full_names(text) or self.resolver.full_names(re.sub(r"[-_.]", " ", text)):
+            return True
+        low = text.lower()
+        return any(pid in low for pid in self.resolver.name_of)
 
     def _as_evidence(self, row: dict, ts: str) -> CorpusEvidence:
         return CorpusEvidence(
@@ -285,11 +326,13 @@ class Toolbox:
 # Hand-written (D-029 idiom: schema design is eval design; the trajectory eval scores calls
 # against these shapes). Descriptions are model-facing prompt surface: versioned with the
 # coordinator prompt, not tweaked casually.
-# web_search is OFF the menu until Step 7 lands a provider. Advertising a tool that always
-# returns web_unavailable cost the first agent re-baseline: 13 of 59 turns spent a round on it,
-# and 3 single-hop questions about a member's own project were refused after calling ONLY the
-# dead tool -- the model never tried the dossiers. The method stays, so Step 7 flips one flag.
-WEB_SEARCH_ENABLED = False
+# ON since 2026-10-13, with the outgoing-query check (D-044, Toolbox._names_member) in place.
+# Turns the tool on for the chat agent AND the coordinator's menu, so the next measured run is
+# a new configuration, not a re-run. History: advertising a dead web tool cost the first agent
+# re-baseline -- 13 of 59 turns spent a round on it, and 3 single-hop questions about a
+# member's own project were refused after calling ONLY that tool. A live tool can over-trigger
+# the same way; an eval in WEB_MODE=replay with no recordings recreates exactly that dead tool.
+WEB_SEARCH_ENABLED = True
 
 TOOL_SCHEMAS: list[dict] = [
     {
@@ -336,11 +379,16 @@ TOOL_SCHEMAS: list[dict] = [
         "name": "web_search",
         "description": (
             "Search the web for out-of-corpus, current information (news, policy, markets). "
-            "Never use it for facts about members -- member claims come from dossiers only."
+            "Never use it for facts about members -- member claims come from dossiers only. "
+            "kind: 'news' for what is happening now (past month), 'background' for analysis "
+            "and explainers of any date."
         ),
         "input_schema": {
             "type": "object",
-            "properties": {"query": {"type": "string"}},
+            "properties": {
+                "query": {"type": "string"},
+                "kind": {"type": "string", "enum": ["news", "background"], "default": "news"},
+            },
             "required": ["query"],
         },
     },
@@ -365,6 +413,11 @@ if __name__ == "__main__":
     assert r["ok"] and all(m["person_id"] != asker for m in r["members"]), "self-exclusion broke"
 
     ids = [m["person_id"] for m in r["members"]]
+    r_ex = tb.find_members("experience expanding a business into China",
+                           exclude_person_ids=[r["members"][0]["name"]])
+    assert r_ex["ok"] and r["members"][0]["person_id"] not in         [m["person_id"] for m in r_ex["members"]], "exclusion by NAME failed"
+    print("find_members(exclude by name): excluded person absent")
+
     r2 = tb.find_members("manufacturing operations", within_person_ids=ids)
     print(f"find_members(within prior set): ok={r2['ok']} members={len(r2.get('members', []))}")
     assert r2["ok"] and all(m["person_id"] in ids for m in r2.get("members", [])), \
@@ -379,5 +432,6 @@ if __name__ == "__main__":
     assert r4["error"] in ("not_a_member", "no_person_resolved")
 
     r5 = tb.web_search("strait of hormuz closure shipping")
-    print(f"web_search stub -> ok={r5['ok']} error={r5.get('error')}")
+    print(f"web_search -> ok={r5['ok']} results={len(r5.get('results', []))} "
+          f"error={r5.get('error')}")
     print("toolbox smoke passed")

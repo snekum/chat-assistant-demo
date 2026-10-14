@@ -39,7 +39,8 @@ def send(message: str, history: list, person_id: str, thread_id: str):
     yield history, thread_id, ""
     try:
         for kind, text in svc.ask(thread_id, person_id, message):
-            history[-1]["content"] = f"_{text}..._" if kind == "status" else render_reply(text)
+            history[-1]["content"] = (f"_{text}..._" if kind == "status"
+                                      else render_reply(text, svc.links(thread_id)))
             yield history, thread_id, ""
     except Exception as exc:  # show it in the window; a demo should never die silently
         history[-1]["content"] = f"Something went wrong: {type(exc).__name__}: {exc}"
