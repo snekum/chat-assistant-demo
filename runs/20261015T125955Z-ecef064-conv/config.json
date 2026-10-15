@@ -1,0 +1,41 @@
+{
+ "run_id": "20261015T125955Z-ecef064-conv",
+ "runner": "eval/conversation_run.py",
+ "git": {
+  "sha": "ecef064",
+  "dirty": true
+ },
+ "conversations": {
+  "file": "conversations.jsonl",
+  "ids": [
+   "cv-009",
+   "cv-010",
+   "cv-011",
+   "cv-012",
+   "cv-013"
+  ],
+  "sha256": "fd65c3aad260376a62551b5e01f18dd9adb8d33251652f348ccb36fc4130acbe"
+ },
+ "agent": {
+  "model": "claude-haiku-4-5",
+  "web": "off",
+  "model_picks": false,
+  "prompt_sha256": "28817e5f194765ed526ee88a3351e36320fd15a3c0fd6275229fb911c4fb72ed",
+  "hybrid_search": true,
+  "keep_turns": 3,
+  "cold_cache_s": 300
+ },
+ "clock": {
+  "start": 1800000000.0,
+  "turn_gap_s": 30
+ },
+ "asker_sha256_12": "5851c6be243b",
+ "limit": null,
+ "only": [
+  "cv-009",
+  "cv-010",
+  "cv-011",
+  "cv-012",
+  "cv-013"
+ ]
+}

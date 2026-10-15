@@ -1,0 +1,81 @@
+{
+ "n_conversations": 5,
+ "n_turns": 13,
+ "checks": {
+  "pass": 8,
+  "fail": 0,
+  "setup_failed": 0
+ },
+ "by_kind": {
+  "intro": {
+   "pass": 7,
+   "fail": 0,
+   "setup_failed": 0
+  },
+  "lookup": {
+   "pass": 1,
+   "fail": 0,
+   "setup_failed": 0
+  }
+ },
+ "errors": 0,
+ "first_words_s": {
+  "tool_turns_p50": 2.05,
+  "tool_turns_p95": 4.25,
+  "no_tool_turns_p50": null,
+  "n_tool_turns": 13,
+  "turns_showing_pre_tool_text": 3
+ },
+ "turn_s_p50": 5.34,
+ "cost_usd": 0.1148,
+ "per_check": {
+  "cv-009.t2": {
+   "kind": "intro",
+   "pattern": "intro: draft and approve as written",
+   "result": "pass",
+   "detail": "draft to L1.2 (102 words), approve -> 1 sent"
+  },
+  "cv-010.t2": {
+   "kind": "intro",
+   "pattern": "intro: member edits before sending",
+   "result": "pass",
+   "detail": "draft to L1.1 (92 words), edit -> 1 sent"
+  },
+  "cv-011.t2": {
+   "kind": "intro",
+   "pattern": "intro: member asks for changes, then approves the redraft",
+   "result": "pass",
+   "detail": "draft to L1.3 (70 words), none -> 0 sent"
+  },
+  "cv-011.t3": {
+   "kind": "intro",
+   "pattern": "intro: member asks for changes, then approves the redraft",
+   "result": "pass",
+   "detail": "draft to L1.3 (30 words), approve -> 1 sent"
+  },
+  "cv-012.t2": {
+   "kind": "intro",
+   "pattern": "intro: member declines, then picks someone else",
+   "result": "pass",
+   "detail": "draft to L1.1 (75 words), reject -> 0 sent"
+  },
+  "cv-012.t3": {
+   "kind": "intro",
+   "pattern": "intro: member declines, then picks someone else",
+   "result": "pass",
+   "detail": "draft to L1.2 (74 words), approve -> 1 sent"
+  },
+  "cv-013.t2": {
+   "kind": "lookup",
+   "pattern": "intro: message the person just discussed",
+   "result": "pass",
+   "detail": "fetched ['L1.2'] wanted ['L1.2']"
+  },
+  "cv-013.t3": {
+   "kind": "intro",
+   "pattern": "intro: message the person just discussed",
+   "result": "pass",
+   "detail": "draft to L1.2 (114 words), approve -> 1 sent"
+  }
+ }
+}

@@ -17,6 +17,12 @@ Checks (on the turn that carries "expect"):
               with the earlier list(s), and there is at least one
   within      "among those": every find_members call this turn narrows with within_person_ids,
               and the reply names nobody outside the list(s)
+  intro       a message for the member (D-055): the turn ends waiting for approval with NOTHING
+              sent yet, the draft is to the referred person and names nobody else; then the
+              runner decides as the member would ("decide": approve / edit / reject / none) and
+              the outbox must hold exactly what was approved (the edited text for an edit,
+              nothing for a reject). "shorter": the redraft after "make it shorter" is shorter.
+              A message typed while a draft waits declines it with those words, as in the app.
 A reference beyond a list's length (the agent showed 3, the member asks for the fourth) scores
 setup_failed -- the conversation could not be set up, so it is neither a pass nor a fail.
 
@@ -64,6 +70,7 @@ import cost  # noqa: E402
 import store  # noqa: E402
 import tools  # noqa: E402
 from chat_run import usage_of  # noqa: E402
+from outbox import MemoryOutbox  # noqa: E402
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage  # noqa: E402
 
 CONVERSATIONS = ROOT / "eval" / "conversations.jsonl"
@@ -76,6 +83,7 @@ SPEND_CEILING_USD = float(os.environ.get("EVAL_SPEND_CEILING", "0.75"))
 #   turn asks for a pause. Symptom wrong: never -- it only has to stay under COLD_CACHE_S.)
 TURN_GAP_S = 30
 START_CLOCK = 1_800_000_000.0
+EDIT_APPEND = "Happy to work around your schedule."   # what the "member" adds on an edit turn
 TEMPLATE = re.compile(r"\{(L\d+)\.(\d+|last)\.(first|name)\}")
 ITEM_LINE = re.compile(r"^\s*(\d+[.)]|[-*•])\s")
 
@@ -159,8 +167,44 @@ def turn_evidence(new_msgs: list, asker: str) -> dict:
             "tool_calls": [{"name": c["name"], "args": c["args"]} for c in calls.values()]}
 
 
-def check(expect: dict, lists: dict, ev: dict, named: list[str]) -> dict:
+def check_intro(expect: dict, lists: dict, ev: dict, intro: dict) -> dict:
+    want = resolve_ref(expect["target"], lists)
+    if want is None:
+        return {"result": "setup_failed", "detail": f"list too short for {expect['target']}"}
+    waiting = intro["approval"]
+    if waiting is None:
+        tried = any(c["name"] == "send_intro" for c in ev["tool_calls"])
+        return {"result": "fail", "detail": "no approval requested ("
+                + ("its send was refused" if tried else "no send_intro call") + ")"}
+    how, sent = expect.get("decide", "approve"), intro["sent"]
+    draft = waiting["message"].strip()
+    words = len(draft.split())
+    problems = []
+    if intro["sent_at_approval"]:
+        problems.append(f"{intro['sent_at_approval']} sent BEFORE approval")
+    if waiting["recipient_id"] != want:
+        problems.append(f"draft to {label_of(waiting['recipient_id'], lists)}")
+    if intro["others_named"]:
+        problems.append(f"draft names {intro['others_named']} other member(s)")
+    if how in ("approve", "edit"):
+        text = (intro["edit_text"] or "").strip() if how == "edit" else draft
+        if [(s.to_person_id, s.message, s.edited) for s in sent] != [(want, text, how == "edit")]:
+            problems.append(f"outbox after {how}: {len(sent)} sent, not the approved text")
+    elif sent:
+        problems.append(f"{len(sent)} sent after {how}")
+    if expect.get("shorter") and not (intro["previous_draft"]
+                                      and words < len(intro["previous_draft"].split())):
+        problems.append("not shorter than the previous draft")
+    detail = (f"draft to {label_of(waiting['recipient_id'], lists, expect['target'].split('.')[0])}"
+              f" ({words} words{', over 150' if words > 150 else ''}), {how} -> {len(sent)} sent")
+    return {"result": "fail" if problems else "pass",
+            "detail": detail + ("; " + "; ".join(problems) if problems else "")}
+
+
+def check(expect: dict, lists: dict, ev: dict, named: list[str], intro: dict | None = None) -> dict:
     kind = expect["kind"]
+    if kind == "intro":
+        return check_intro(expect, lists, ev, intro or {})
     asked = not ev["tool_calls"] and "?" in ev["reply"]
     if kind in ("lookup", "lookup_set"):
         refs = [expect["target"]] if kind == "lookup" else expect["targets"]
@@ -200,11 +244,33 @@ def check(expect: dict, lists: dict, ev: dict, named: list[str]) -> dict:
 
 # --- running ---------------------------------------------------------------------------------
 
+def _consume(events, t0: float):
+    """Drain one stream of screen events -> (reply first words, pre-tool text time, approval).
+    A drafted message counts as words on screen like a reply."""
+    first = flash = approval = None
+    shown = ""
+    for kind, part in events:
+        if kind == "approval":
+            approval = part
+        if kind not in ("partial", "draft"):
+            continue
+        # Partials only grow within one model call. Text that is not a continuation
+        # came from a NEW call: what was on screen before it was text the model wrote
+        # ahead of a tool call (seen 2026-10-15) -- first words = the reply's own.
+        now = time.perf_counter() - t0
+        if first is None or not part.startswith(shown):
+            flash = flash if first is None else (flash or first)
+            first = now
+        shown = part
+    return first, flash, approval
+
+
 def run_conversation(chat, resolver, asker, conv: dict, tick: dict,
-                     on_turn: Callable | None = None) -> list[dict]:
-    cfg = {"configurable": {"thread_id": f"conv-{conv['id']}-{tick['t']:.0f}"}}
+                     on_turn: Callable | None = None, outbox=None) -> list[dict]:
+    thread = f"conv-{conv['id']}-{tick['t']:.0f}"
+    cfg = {"configurable": {"thread_id": thread}}
     lists: dict[str, list[str]] = {}
-    rows, stopped = [], None
+    rows, stopped, previous_draft = [], None, None
     for n, spec in enumerate(conv["turns"], 1):
         row = {"cid": conv["id"], "turn": n, "pattern": conv["pattern"], "pause_s":
                spec.get("pause_s", 0), "expect": spec.get("expect"), "check": None}
@@ -219,20 +285,25 @@ def run_conversation(chat, resolver, asker, conv: dict, tick: dict,
         if on_turn:
             on_turn(spec, lists, conv)
         before = len(chat.get_state(cfg).values.get("messages", []))
-        t0, first, flash, shown, error = time.perf_counter(), None, None, "", None
+        sent_before = len(outbox.sent) if outbox is not None else 0
+        exp = spec.get("expect") or {}
+        t0, first, flash, error = time.perf_counter(), None, None, None
+        approval, decided, edit_text, sent_at_approval = None, None, None, None
         try:
-            for kind, part in agent.stream_turn(chat, resolver, cfg["configurable"]["thread_id"],
-                                                asker, text):
-                if kind != "partial":
-                    continue
-                # Partials only grow within one model call. Text that is not a continuation
-                # came from a NEW call: what was on screen before it was text the model wrote
-                # ahead of a tool call (seen 2026-10-15) -- first words = the reply's own.
-                now = time.perf_counter() - t0
-                if first is None or not part.startswith(shown):
-                    flash = flash if first is None else (flash or first)
-                    first = now
-                shown = part
+            waiting = agent.pending_approval(chat, resolver, thread, asker)
+            events = (agent.resume_turn(chat, resolver, thread, asker,
+                                        agent.feedback_decision(text)) if waiting
+                      else agent.stream_turn(chat, resolver, thread, asker, text))
+            first, flash, approval = _consume(events, t0)
+            if approval is not None:
+                sent_at_approval = len(outbox.sent) - sent_before if outbox is not None else 0
+                how = exp.get("decide", "approve") if exp.get("kind") == "intro" else "none"
+                if how != "none":
+                    if how == "edit":
+                        edit_text = f"{approval['message'].rstrip()} {EDIT_APPEND}"
+                    decided = agent.member_decision(approval, how != "reject", edit_text)
+                    _consume(agent.resume_turn(chat, resolver, thread, asker, decided),
+                             time.perf_counter())
         except Exception as exc:  # a guard or tool failure is a result, not a crash
             error = f"{type(exc).__name__}: {exc}"
         took = time.perf_counter() - t0
@@ -240,8 +311,15 @@ def run_conversation(chat, resolver, asker, conv: dict, tick: dict,
         new = state.get("messages", [])[before:]
         ev = turn_evidence(new, asker.person_id)
         named = named_on_screen(ev["reply"], resolver.name_of, asker.person_id)
+        draft = (approval or {}).get("message", "")
+        intro = {"approval": approval, "sent_at_approval": sent_at_approval,
+                 "sent": outbox.sent[sent_before:] if outbox is not None else [],
+                 "edit_text": edit_text, "previous_draft": previous_draft,
+                 "others_named": len(set(resolver.full_names(draft))
+                                     - {(approval or {}).get("recipient_id"), asker.person_id})}
         if spec.get("expect"):
-            row["check"] = check(spec["expect"], lists, ev, named)
+            row["check"] = check(spec["expect"], lists, ev, named, intro)
+        previous_draft = draft or previous_draft
         if spec.get("list"):
             earlier = {p for people in lists.values() for p in people}
             lists[spec["list"]] = [p for p in named
@@ -257,7 +335,9 @@ def run_conversation(chat, resolver, asker, conv: dict, tick: dict,
                    pre_tool_text_s=round(flash, 2) if flash is not None else None,
                    turn_s=round(took, 2), usage=usage, cost_usd=usd,
                    dropped_through=state.get("search_results_dropped_through", 0),
-                   lists={k: len(v) for k, v in lists.items()})
+                   lists={k: len(v) for k, v in lists.items()},
+                   draft=draft or None, draft_words=len(draft.split()) if draft else None,
+                   decision=(decided or {}).get("type"), sent=len(intro["sent"]))
         rows.append(row)
         c = row["check"]
         print(f"  [{conv['id']} t{n}] tools={[t['name'] for t in ev['tool_calls']]} "
@@ -353,11 +433,12 @@ def main() -> None:
     conn, resolver, emb, asker = setup()
     tick = {"t": START_CLOCK}
     agent._clock = lambda: tick["t"]
+    box = MemoryOutbox()     # an eval never writes to the real outbox table
     chat = agent.build_agent(emb, conn, resolver, InMemorySaver(), web_enabled=False,
-                             model_picks=False)
+                             model_picks=False, outbox=box)
     convs, rows, spent = load_conversations(), [], 0.0
     for conv in convs:
-        conv_rows = run_conversation(chat, resolver, asker, conv, tick)
+        conv_rows = run_conversation(chat, resolver, asker, conv, tick, outbox=box)
         rows += conv_rows
         spent += sum(r.get("cost_usd") or 0 for r in conv_rows)
         if spent > SPEND_CEILING_USD:
@@ -386,9 +467,33 @@ def play_scripted(conn, resolver, emb, asker, convs, wrong: bool = False, pad_wo
     name = resolver.name_of
     filler = " This member has experience that is directly relevant to what you asked about."
 
+    def intro_call(exp, lists, short: bool) -> AIMessage:
+        pid = resolve_ref(exp["target"], lists)
+        if wrong:   # the neighbour on the list instead of the referred person
+            people = lists[exp["target"].split(".")[0]]
+            pid = people[(people.index(pid) + 1) % len(people)]
+        first = name[pid].split()[0]
+        text = (f"Hi {first}, would you have 20 minutes for a quick call next week?" if short
+                else f"Hi {first}, I run a company in a similar space and your experience stood "
+                     "out to me. Would you be open to a 20-minute call next week to compare "
+                     "notes? Thanks, and no pressure either way.")
+        ctx["n"] += 1
+        return AIMessage(content="", tool_calls=[{"name": "send_intro", "id": f"c{ctx['n']}",
+                                                  "args": {"recipient": name[pid],
+                                                           "message": text}}])
+
     def act(messages) -> AIMessage:
         spec, lists, conv = ctx["spec"], ctx["lists"], ctx["conv"]
         ctx["calls"].append((conv["id"], ctx["turn"], list(messages)))
+        last, exp = messages[-1], spec.get("expect") or {}
+        if isinstance(last, ToolMessage) and last.name == "send_intro":
+            said = agent._text(last)
+            if "did not send it and said" in said and exp.get("kind") == "intro":
+                return intro_call(exp, lists, short=True)       # "make it shorter" -> redraft
+            return AIMessage(content="Done, it's sent." if '"ok": true' in said
+                             else "Okay, I won't send it.")
+        if isinstance(last, HumanMessage) and exp.get("kind") == "intro":
+            return intro_call(exp, lists, short=False)
         if isinstance(messages[-1], ToolMessage):        # write the reply from this turn's results
             shown = []
             for m in reversed(messages):
@@ -456,11 +561,12 @@ def play_scripted(conn, resolver, emb, asker, convs, wrong: bool = False, pad_wo
 
     tick = {"t": START_CLOCK}
     agent._clock = lambda: tick["t"]
+    box = MemoryOutbox()
     chat = agent.build_agent(emb, conn, resolver, InMemorySaver(), model=Acting(),
-                             web_enabled=False, model_picks=False)
+                             web_enabled=False, model_picks=False, outbox=box)
     try:
         rows = [r for conv in convs
-                for r in run_conversation(chat, resolver, asker, conv, tick, on_turn)]
+                for r in run_conversation(chat, resolver, asker, conv, tick, on_turn, box)]
     finally:
         agent._clock = time.time
     return rows, ctx

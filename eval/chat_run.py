@@ -13,7 +13,7 @@ What differs from agent_run.py, and why:
     gold text instead of by a declaration, and clarify over-triggering on answerable questions
     is not measurable here (no declaration to count).
   * Evidence = what the tools returned this turn, recorded from the Toolbox itself (the model is
-    shown a slimmer view of the same passages, A25), plus the asker's profile summary, which the
+    shown a slimmer view of the same passages), plus the asker's profile summary, which the
     agent's system prompt carries -- without it, correct use of the asker's own profile would
     score ungrounded.
   * The eval owns the clock (EVAL NOTES 2026-10-14 b): the agent's pause-triggered trimming

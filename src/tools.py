@@ -345,7 +345,7 @@ class Toolbox:
 
     def _names_member(self, text: str) -> bool:
         """Full name in any separator form ("Jane Rivera", "jane-rivera", "jane_rivera") or a
-        raw person_id. Full-name pairs only, as in the reply name check (A12): a lone surname
+        raw person_id. Full-name pairs only, as in the reply name check: a lone surname
         is usually an ordinary word. Known gaps: a middle initial between the names; a company
         name that identifies a founder (D-044's rejected option B)."""
         if self.resolver.full_names(text) or self.resolver.full_names(re.sub(r"[-_.]", " ", text)):
