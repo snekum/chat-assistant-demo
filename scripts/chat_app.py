@@ -43,13 +43,16 @@ def _drive(events, history: list, thread_id: str):
     """Screen updates for one stream of agent events -> (chat, thread, input box, approval
     panel, its note, the editable draft). A turn ends with the reply, or with a message
     waiting for the member's approval (D-055): then the panel opens with the draft in it."""
+    drafted = ""
     try:
         for kind, payload in events:
-            if kind == "status":
-                history[-1]["content"] = f"_{payload}..._"
+            if kind == "status":        # under a draft (it is being checked), not over it
+                history[-1]["content"] = (f"{drafted}\n\n_{payload}..._" if drafted
+                                          else f"_{payload}..._")
             elif kind == "partial":
                 history[-1]["content"] = render_partial(payload)
             elif kind == "draft":       # the message being written, before it is complete
+                drafted = payload
                 history[-1]["content"] = f"_Drafting your message..._\n\n{payload} ▌"
             elif kind == "approval":
                 history[-1]["content"] = (

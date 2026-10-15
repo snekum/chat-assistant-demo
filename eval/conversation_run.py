@@ -24,6 +24,9 @@ Checks (on the turn that carries "expect"):
               nothing for a reject). "shorter": the redraft after "make it shorter" is shorter.
               A message typed while a draft waits declines it with those words, as in the app.
   asks        the member asked for a message without saying why: no draft, a question back.
+Every draft is fact-checked by a second provider before the card (D-057); each check is recorded
+(time, cost, what it flagged), with the rewrites it caused and any claim still unconfirmed at
+the card. The scripted self-check uses a stub checker -- it never calls the second provider.
 A reference beyond a list's length (the agent showed 3, the member asks for the fourth) scores
 setup_failed -- the conversation could not be set up, so it is neither a pass nor a fail.
 
@@ -71,6 +74,7 @@ import cost  # noqa: E402
 import store  # noqa: E402
 import tools  # noqa: E402
 from chat_run import usage_of  # noqa: E402
+import factcheck  # noqa: E402
 from outbox import MemoryOutbox  # noqa: E402
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage  # noqa: E402
 
@@ -84,6 +88,7 @@ SPEND_CEILING_USD = float(os.environ.get("EVAL_SPEND_CEILING", "0.75"))
 #   turn asks for a pause. Symptom wrong: never -- it only has to stay under COLD_CACHE_S.)
 TURN_GAP_S = 30
 START_CLOCK = 1_800_000_000.0
+FACTCHECKS: list[dict] = []   # every fact-check this process made, in order (see recording_checker)
 EDIT_APPEND = "Happy to work around your schedule."   # what the "member" adds on an edit turn
 TEMPLATE = re.compile(r"\{(L\d+)\.(\d+|last)\.(first|name)\}")
 ITEM_LINE = re.compile(r"^\s*(\d+[.)]|[-*•])\s")
@@ -143,14 +148,32 @@ def label_of(pid: str, lists: dict, prefer: str | None = None) -> str:
     return "outside"
 
 
+def recording_checker(check):
+    """Wrap a fact-checker so every call is logged (the turn rows read their slice)."""
+    def wrapped(draft, recipient_doc, sender_doc, words):
+        fc = check(draft, recipient_doc, sender_doc, words)
+        # The filter, the card text and the tool each ask about the same draft and get the one
+        # cached result: log it once, or calls and cost read ~3x (they did on 2026-10-15).
+        if getattr(fc, "_recorded", False):
+            return fc
+        fc._recorded = True
+        FACTCHECKS.append({"ok": fc.ok, "n_unsupported": len(fc.unsupported), "error": fc.error,
+                           "seconds": round(fc.seconds, 2), "cost_usd": fc.cost_usd,
+                           "unsupported": fc.unsupported})
+        return fc
+    return wrapped
+
+
 def turn_evidence(new_msgs: list, asker: str) -> dict:
     """What the agent did this turn: who get_person_evidence fetched, each find_members call
     (its arguments and who it returned), and the final reply."""
     calls = {c["id"]: c for m in new_msgs if isinstance(m, AIMessage) for c in (m.tool_calls or [])}
-    fetched, searches = [], []
+    fetched, searches, sent_back = [], [], 0
     for m in new_msgs:
         if not isinstance(m, ToolMessage):
             continue
+        if m.name == "send_intro" and agent.UNSUPPORTED in agent._text(m):
+            sent_back += 1
         try:
             out = json.loads(agent._text(m))
         except json.JSONDecodeError:
@@ -164,7 +187,7 @@ def turn_evidence(new_msgs: list, asker: str) -> dict:
                              "found": [p["person_id"] for p in out.get("members", [])]})
     final = new_msgs[-1] if new_msgs else None
     reply = agent._text(final) if isinstance(final, AIMessage) and not final.tool_calls else ""
-    return {"fetched": fetched, "searches": searches, "reply": reply,
+    return {"fetched": fetched, "searches": searches, "reply": reply, "sent_back": sent_back,
             "tool_calls": [{"name": c["name"], "args": c["args"]} for c in calls.values()]}
 
 
@@ -197,7 +220,10 @@ def check_intro(expect: dict, lists: dict, ev: dict, intro: dict) -> dict:
                                       and words < len(intro["previous_draft"].split())):
         problems.append("not shorter than the previous draft")
     detail = (f"draft to {label_of(waiting['recipient_id'], lists, expect['target'].split('.')[0])}"
-              f" ({words} words{', over 150' if words > 150 else ''}), {how} -> {len(sent)} sent")
+              f" ({words} words{', over 150' if words > 150 else ''}), {how} -> {len(sent)} sent"
+              + (f", {ev['sent_back']} rewrite(s) after the fact-check" if ev["sent_back"] else "")
+              + (", reached the card UNCONFIRMED" if "Still not confirmed" in
+                 waiting.get("description", "") else ""))
     return {"result": "fail" if problems else "pass",
             "detail": detail + ("; " + "; ".join(problems) if problems else "")}
 
@@ -294,6 +320,7 @@ def run_conversation(chat, resolver, asker, conv: dict, tick: dict,
             on_turn(spec, lists, conv)
         before = len(chat.get_state(cfg).values.get("messages", []))
         sent_before = len(outbox.sent) if outbox is not None else 0
+        checks_before = len(FACTCHECKS)
         exp = spec.get("expect") or {}
         t0, first, flash, error = time.perf_counter(), None, None, None
         approval, decided, edit_text, sent_at_approval = None, None, None, None
@@ -336,6 +363,8 @@ def run_conversation(chat, resolver, asker, conv: dict, tick: dict,
         calls = [u for u in (usage_of(m) for m in ai) if u]
         usage = {k: sum(c[k] for c in calls) for k in calls[0]} if calls else {}
         usd = cost.cost_usd({"model": agent.AGENT_MODEL, **usage}) if usage else 0.0
+        checks = FACTCHECKS[checks_before:]
+        usd = (usd or 0.0) + sum(c["cost_usd"] for c in checks)
         row.update(user=text, reply=ev["reply"], named=[label_of(p, lists) for p in named],
                    named_ids=named, fetched=ev["fetched"], searches=ev["searches"],
                    tool_calls=ev["tool_calls"], rounds=len(ai), error=error,
@@ -345,7 +374,10 @@ def run_conversation(chat, resolver, asker, conv: dict, tick: dict,
                    dropped_through=state.get("search_results_dropped_through", 0),
                    lists={k: len(v) for k, v in lists.items()},
                    draft=draft or None, draft_words=len(draft.split()) if draft else None,
-                   decision=(decided or {}).get("type"), sent=len(intro["sent"]))
+                   decision=(decided or {}).get("type"), sent=len(intro["sent"]),
+                   factchecks=checks, sent_back=ev["sent_back"],
+                   unconfirmed_at_card="Still not confirmed" in (approval or {}).get(
+                       "description", ""))
         rows.append(row)
         c = row["check"]
         print(f"  [{conv['id']} t{n}] tools={[t['name'] for t in ev['tool_calls']]} "
@@ -384,6 +416,15 @@ def summarize(rows: list[dict]) -> dict:
                                                              if r.get("pre_tool_text_s"))},
         "turn_s_p50": pct([r["turn_s"] for r in ran], .5),
         "cost_usd": round(sum(r["cost_usd"] or 0 for r in ran), 4),
+        "factcheck": {
+            "model": factcheck.MODEL, "version": factcheck.VERSION,
+            "calls": sum(len(r.get("factchecks", [])) for r in ran),
+            "flagged": sum(1 for r in ran for c in r.get("factchecks", []) if c["ok"] is False),
+            "errors": sum(1 for r in ran for c in r.get("factchecks", []) if c["ok"] is None),
+            "rewrites": sum(r.get("sent_back", 0) for r in ran),
+            "unconfirmed_at_card": sum(1 for r in ran if r.get("unconfirmed_at_card")),
+            "seconds_p50": pct([c["seconds"] for r in ran for c in r.get("factchecks", [])], .5),
+            "cost_usd": round(sum(c["cost_usd"] for r in ran for c in r.get("factchecks", [])), 4)},
         "per_check": checks}
 
 
@@ -443,7 +484,8 @@ def main() -> None:
     agent._clock = lambda: tick["t"]
     box = MemoryOutbox()     # an eval never writes to the real outbox table
     chat = agent.build_agent(emb, conn, resolver, InMemorySaver(), web_enabled=False,
-                             model_picks=False, outbox=box)
+                             model_picks=False, outbox=box,
+                             fact_checker=recording_checker(factcheck.check))
     convs, rows, spent = load_conversations(), [], 0.0
     for conv in convs:
         conv_rows = run_conversation(chat, resolver, asker, conv, tick, outbox=box)
@@ -594,7 +636,9 @@ def play_scripted(conn, resolver, emb, asker, convs, wrong: bool = False, pad_wo
     agent._clock = lambda: tick["t"]
     box = MemoryOutbox()
     chat = agent.build_agent(emb, conn, resolver, InMemorySaver(), model=Acting(),
-                             web_enabled=False, model_picks=False, outbox=box)
+                             web_enabled=False, model_picks=False, outbox=box,
+                             fact_checker=recording_checker(
+                                 lambda *a: factcheck.FactCheck(ok=True)))   # never the network
     try:
         rows = [r for conv in convs
                 for r in run_conversation(chat, resolver, asker, conv, tick, on_turn, box)]
@@ -642,6 +686,9 @@ def selfcheck() -> None:
 #   2026-10-14), a tool-call message ~80 tokens, x1.4 for the real agent's extra lookups and
 #   searches the script does not make. Symptom wrong: a real run costs more than the quote.)
 QUOTE_REPLY_TOKENS, QUOTE_TOOL_CALL_TOKENS, QUOTE_MARGIN = 450, 80, 1.4
+# TUNABLE(fact-check quote: ~9k tokens in at $0.75/M + ~500 out at $4.50/M ~ $0.009 per check,
+#   1.5 checks per draft for rewrites. Symptom wrong: calibration's measured cost per check.)
+QUOTE_CHECK_USD, QUOTE_CHECKS_PER_DRAFT = 0.009, 1.5
 CACHE_MIN_TOKENS = 4096  # Haiku 4.5's minimum cacheable prefix
 
 
@@ -678,8 +725,12 @@ def quote() -> None:
     print(f"{len(ctx['calls'])} scripted model calls over {len(rows)} turns; input per call "
           f"{min(sizes):,}-{max(sizes):,} tokens")
     print("per conversation: " + ", ".join(f"{k} ${v:.3f}" for k, v in per_conv.items()))
+    drafts = sum(1 for r in rows if r.get("draft"))
+    checks_usd = drafts * QUOTE_CHECKS_PER_DRAFT * QUOTE_CHECK_USD
     print(f"scripted total ${total:.3f}; quote with x{QUOTE_MARGIN} for the real agent's extra "
           f"calls: ${total * QUOTE_MARGIN:.2f} (ceiling in code ${SPEND_CEILING_USD})")
+    print(f"fact-checks (second provider, billed separately): {drafts} drafts x "
+          f"{QUOTE_CHECKS_PER_DRAFT} checks x ${QUOTE_CHECK_USD} = ${checks_usd:.3f}")
 
 
 if __name__ == "__main__":

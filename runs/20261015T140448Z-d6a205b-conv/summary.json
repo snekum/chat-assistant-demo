@@ -1,0 +1,103 @@
+{
+ "n_conversations": 5,
+ "n_turns": 14,
+ "checks": {
+  "pass": 5,
+  "fail": 4,
+  "setup_failed": 0
+ },
+ "by_kind": {
+  "intro": {
+   "pass": 3,
+   "fail": 4,
+   "setup_failed": 0
+  },
+  "asks": {
+   "pass": 1,
+   "fail": 0,
+   "setup_failed": 0
+  },
+  "lookup": {
+   "pass": 1,
+   "fail": 0,
+   "setup_failed": 0
+  }
+ },
+ "errors": 0,
+ "first_words_s": {
+  "tool_turns_p50": 2.35,
+  "tool_turns_p95": 6.33,
+  "no_tool_turns_p50": null,
+  "n_tool_turns": 14,
+  "turns_showing_pre_tool_text": 3
+ },
+ "turn_s_p50": 5.84,
+ "cost_usd": 0.1558,
+ "factcheck": {
+  "model": "gpt-5.4-mini",
+  "version": "factcheck-v1",
+  "calls": 16,
+  "flagged": 2,
+  "errors": 0,
+  "rewrites": 1,
+  "unconfirmed_at_card": 0,
+  "seconds_p50": 1.97,
+  "cost_usd": 0.0339
+ },
+ "per_check": {
+  "cv-009.t2": {
+   "kind": "intro",
+   "pattern": "intro: draft and approve as written",
+   "result": "fail",
+   "detail": "no approval requested (no send_intro call)"
+  },
+  "cv-010.t2": {
+   "kind": "intro",
+   "pattern": "intro: member edits before sending",
+   "result": "fail",
+   "detail": "no approval requested (no send_intro call)"
+  },
+  "cv-011.t2": {
+   "kind": "intro",
+   "pattern": "intro: member asks for changes, then approves the redraft",
+   "result": "fail",
+   "detail": "no approval requested (no send_intro call)"
+  },
+  "cv-011.t3": {
+   "kind": "intro",
+   "pattern": "intro: member asks for changes, then approves the redraft",
+   "result": "fail",
+   "detail": "no approval requested (its send was refused)"
+  },
+  "cv-012.t2": {
+   "kind": "asks",
+   "pattern": "intro: no reason given -> asks; then declines, then picks someone else",
+   "result": "pass",
+   "detail": "asked"
+  },
+  "cv-012.t3": {
+   "kind": "intro",
+   "pattern": "intro: no reason given -> asks; then declines, then picks someone else",
+   "result": "pass",
+   "detail": "draft to L1.1 (77 words), reject -> 0 sent"
+  },
+  "cv-012.t4": {
+   "kind": "intro",
+   "pattern": "intro: no reason given -> asks; then declines, then picks someone else",
+   "result": "pass",
+   "detail": "draft to L1.2 (87 words), approve -> 1 sent"
+  },
+  "cv-013.t2": {
+   "kind": "lookup",
+   "pattern": "intro: message the person just discussed",
+   "result": "pass",
+   "detail": "fetched ['L1.2'] wanted ['L1.2']"
+  },
+  "cv-013.t3": {
+   "kind": "intro",
+   "pattern": "intro: message the person just discussed",
+   "result": "pass",
+   "detail": "draft to L1.2 (101 words), approve -> 1 sent"
+  }
+ }
+}

@@ -55,6 +55,7 @@ from langgraph.types import Command
 from psycopg.rows import dict_row
 from typing_extensions import Annotated, NotRequired
 
+import factcheck
 import hybrid
 import store
 from contracts import REFUSAL_STRING
@@ -331,6 +332,39 @@ def intro_problem(resolver, args: dict, messages, asker_id: str,
     return None, rid
 
 
+UNSUPPORTED = '"error": "unsupported_claims"'
+
+
+def _since_member(messages) -> list:
+    """Messages after the member's latest say: their last message, or their last word on a
+    draft (a decline arrives as a tool result, not a message)."""
+    for i in range(len(messages) - 1, -1, -1):
+        m = messages[i]
+        if isinstance(m, HumanMessage) or (isinstance(m, ToolMessage) and m.name == "send_intro"
+                                           and "rejected the tool call" in _text(m)):
+            return messages[i + 1:]
+    return list(messages)
+
+
+def _redrafted(messages) -> bool:
+    """D-057: one automatic redraft per request; after that, the card shows what is unconfirmed."""
+    return any(isinstance(m, ToolMessage) and m.name == "send_intro" and UNSUPPORTED in _text(m)
+               for m in _since_member(messages))
+
+
+def member_words(messages) -> list[str]:
+    """Everything the member said in the conversation, including a reason typed while a draft
+    waited (it reaches the thread inside the decline, not as a message)."""
+    words = []
+    for m in messages:
+        if isinstance(m, HumanMessage):
+            words.append(_text(m))
+        elif isinstance(m, ToolMessage) and m.name == "send_intro" \
+                and "did not send it and said:" in _text(m):
+            words.append(_text(m).split("did not send it and said:", 1)[1].strip())
+    return words
+
+
 def base_prompt(web_enabled: bool = WEB_SEARCH_ENABLED, model_picks: bool = MODEL_PICKS) -> str:
     """The agent's fixed instructions (the asker is added per request). One assembly, also used
     by eval/split_needs.py so recorded search wording mirrors the prompt the product runs."""
@@ -346,11 +380,24 @@ def base_prompt(web_enabled: bool = WEB_SEARCH_ENABLED, model_picks: bool = MODE
 
 
 def build_agent(emb, conn, resolver, checkpointer, model=None, web_enabled=WEB_SEARCH_ENABLED,
-                model_picks=MODEL_PICKS, outbox=None):
+                model_picks=MODEL_PICKS, outbox=None, fact_checker=None):
     """One compiled agent serves every member; who is asking arrives as runtime context.
-    `outbox` receives approved messages (D-055); tests pass outbox.MemoryOutbox."""
+    `outbox` receives approved messages (D-055); tests pass outbox.MemoryOutbox.
+    `fact_checker` reads each draft against the two dossiers (D-057); tests pass a stub."""
     core = base_prompt(web_enabled, model_picks)
     outbox = outbox if outbox is not None else PostgresOutbox(conn)
+    fact_checker = fact_checker or factcheck.check
+    dossiers: dict[str, str] = {}
+
+    def dossier(pid: str) -> str:
+        if pid not in dossiers:
+            dossiers[pid] = "\n".join(c["text"] for c in
+                                       store.fetch_person_chunks(conn, pid, scheme="whole_doc"))
+        return dossiers[pid]
+
+    def check_draft(message: str, messages, asker_id: str, rid: str):
+        """The recipient's WHOLE dossier is the truth, not only the sections the drafter saw."""
+        return fact_checker(message.strip(), dossier(rid), dossier(asker_id), member_words(messages))
 
     def unseen_ids(refs, runtime: ToolRuntime) -> str | None:
         ids = [r.strip() for r in refs or [] if isinstance(r, str) and r.strip() in resolver.name_of]
@@ -441,6 +488,18 @@ def build_agent(emb, conn, resolver, checkpointer, model=None, web_enabled=WEB_S
                         if isinstance(m, AIMessage) for c in (m.tool_calls or [])
                         if c["id"] == runtime.tool_call_id), message)
         edited = drafted.strip() != message.strip()
+        # D-057: a draft with claims the dossiers don't support goes back for one rewrite before
+        # the member ever sees it. The member's own edit is theirs to send and is not checked.
+        if not edited:
+            fc = check_draft(message, messages, asker, rid)
+            if fc.ok is False and not _redrafted(messages):
+                return _dump({"ok": False, "error": "unsupported_claims",
+                              "unsupported": fc.unsupported, "detail": (
+                                  "Not sent, and not shown to the member: these parts are not "
+                                  "supported by the recipient's dossier, the member's profile or "
+                                  "what the member said. Rewrite the message without them, "
+                                  "keeping only what those sources support, and call send_intro "
+                                  "again.")})
         thread = (runtime.config or {}).get("configurable", {}).get("thread_id")
         row = outbox.send(asker, rid, thread, message.strip(), edited)
         return _dump({"ok": True, "sent_to": resolver.name_of[rid],
@@ -451,9 +510,14 @@ def build_agent(emb, conn, resolver, checkpointer, model=None, web_enabled=WEB_S
     def needs_approval(req) -> bool:
         """Only a valid send reaches the member's approval; an invalid one runs straight into
         the tool, which refuses it with the reason, so nobody approves a message that fails."""
-        problem, _ = intro_problem(resolver, req.tool_call["args"], req.state["messages"],
-                                   req.runtime.context.person_id, req.tool_call["id"])
-        return problem is None
+        asker = req.runtime.context.person_id
+        problem, rid = intro_problem(resolver, req.tool_call["args"], req.state["messages"],
+                                     asker, req.tool_call["id"])
+        if problem:
+            return False
+        fc = check_draft(str(req.tool_call["args"].get("message") or ""), req.state["messages"],
+                         asker, rid)
+        return not (fc.ok is False and not _redrafted(req.state["messages"]))
 
     def describe(tool_call, state, runtime) -> str:
         _, rid = intro_problem(resolver, tool_call["args"], state["messages"],
@@ -462,7 +526,15 @@ def build_agent(emb, conn, resolver, checkpointer, model=None, web_enabled=WEB_S
             return "Send this message?"
         text = f"Send this message to {resolver.name_of[rid]}?"
         last = outbox.last_sent(runtime.context.person_id, rid)
-        return text + (f" You already messaged them on {last:%d %b %Y}." if last else "")
+        text += f" You already messaged them on {last:%d %b %Y}." if last else ""
+        fc = check_draft(str(tool_call["args"].get("message") or ""), state["messages"],
+                         runtime.context.person_id, rid)
+        if fc.ok is False:   # still unsupported after the one rewrite
+            text += " Still not confirmed by their profile or yours: " + "; ".join(
+                f'"{u["quote"]}" ({u["reason"]})' for u in fc.unsupported) + "."
+        elif fc.ok is None:
+            text += " The fact-check could not run this time, so read it carefully first."
+        return text
 
     @tool
     def web_search(query: str, runtime: ToolRuntime, kind: str = "news") -> str:
@@ -718,8 +790,13 @@ def _stream(agent, resolver, thread_id: str, asker: Asker, payload, new_msgs: li
                         what = call["args"].get("criterion") or call["args"].get("query") or ""
                         if call["name"] == "web_search":
                             yield "status", f"Searching the web: {what}"
-                        elif call["name"] != "send_intro":   # its draft is already on screen
+                        elif call["name"] == "send_intro":    # D-057: checked before the card
+                            yield "status", "Checking the draft against their profile"
+                        else:
                             yield "status", f"Looking into: {what}" if what else "Looking into it"
+                    if isinstance(m, ToolMessage) and m.name == "send_intro" \
+                            and UNSUPPORTED in _text(m):
+                        yield "status", "Rewriting a detail their profile doesn't support"
             continue
         chunk, meta = part
         if meta.get("langgraph_node") != "model" or not isinstance(chunk, AIMessageChunk):
@@ -1080,9 +1157,20 @@ if __name__ == "__main__":
     sent_box, intro_saver = MemoryOutbox(), InMemorySaver()
     cfg_i = {"configurable": {"thread_id": "intro"}}
 
+    from factcheck import FactCheck
+
+    def stub_check(draft, recipient_doc, sender_doc, words):
+        """Stands in for the second-provider check: "internationally" is the unsupported claim
+        (the one the 2026-10-15 run produced); "CHECKER-DOWN" makes the check fail to run."""
+        if "CHECKER-DOWN" in draft:
+            return FactCheck(ok=None, error="unreachable")
+        bad = [{"quote": "internationally", "about": "recipient", "reason": "not in profile"}]
+        return FactCheck(ok=False, unsupported=bad) if "internationally" in draft \
+            else FactCheck(ok=True)
+
     def intro_agent(script):
         return build_agent(emb, conn, resolver, intro_saver, model=Scripted(messages=iter(script)),
-                           outbox=sent_box)
+                           outbox=sent_box, fact_checker=stub_check)
 
     def ask(agent, text):
         agent.invoke({"messages": [{"role": "user", "content": text}]}, config=cfg_i,
@@ -1159,4 +1247,34 @@ if __name__ == "__main__":
     assert events[-1] == ("reply", "Sent.") and len(sent_box.sent) == 3, events
     print(f"20. the draft streams on screen in {len(drafts)} pieces as it is written, the turn ends "
           "waiting for approval, and approving finishes it")
+
+    # 21-22 -- the fact-check before the card (D-057), with the stub above.
+    bad = draft.replace("scaling it.", "scaling it internationally.")
+    n_sent = len(sent_box.sent)
+    agent = intro_agent([send(bad, "f1"), send(draft, "f2"), AIMessage(content="Sent.")])
+    msgs = ask(agent, "One more, please")
+    waiting = pending_approval(agent, resolver, "intro", asker)
+    sent_back = [m for m in msgs if isinstance(m, ToolMessage) and UNSUPPORTED in _text(m)]
+    assert waiting and waiting["message"] == draft and len(sent_back) == 1, (waiting, sent_back)
+    assert "Still not confirmed" not in waiting["description"] and len(sent_box.sent) == n_sent
+    decide(agent, {"type": "approve"})
+    assert sent_box.sent[-1].message == draft
+    print("21. a draft with an unsupported claim is sent back for one rewrite before the member "
+          "sees anything; the clean rewrite reaches the card")
+
+    agent = intro_agent([send(bad, "f3"), send(bad + " Thanks.", "f4"), AIMessage(content="Sent.")])
+    ask(agent, "And again")
+    waiting = pending_approval(agent, resolver, "intro", asker)
+    assert waiting and "Still not confirmed" in waiting["description"] \
+        and "internationally" in waiting["description"], waiting
+    mine = bad + " Thanks, and I mean it."      # the member's own edit is theirs: never refused
+    decide(agent, {"type": "edit", "edited_action": {"name": "send_intro", "args": {
+        "recipient": tname, "message": mine}}})
+    assert sent_box.sent[-1].message == mine
+    agent = intro_agent([send(draft + " CHECKER-DOWN", "f5"), AIMessage(content="Sent.")])
+    ask(agent, "Last one")
+    assert "could not run" in pending_approval(agent, resolver, "intro", asker)["description"]
+    decide(agent, {"type": "reject", "message": "The member chose not to send it."})
+    print("22. still unsupported after the rewrite -> the card names what is unconfirmed; a member's "
+          "edit is never refused; a check that cannot run still reaches the card, saying so")
     print("agent self-check passed")
