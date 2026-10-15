@@ -21,6 +21,8 @@ eval/questions.jsonl
 eval/review_queue.jsonl
 # recommendation-quality questions in live users' phrasing (hand-authored); private until decided
 eval/recommend_questions.jsonl
+# multi-turn list-tracking conversations (D-054); private like the other gold files
+eval/conversations.jsonl
 
 # --- Run artifacts ---
 # results.jsonl carries retrieved doc text + generated answers.

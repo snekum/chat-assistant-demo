@@ -1,0 +1,144 @@
+{
+ "n_conversations": 8,
+ "n_turns": 27,
+ "checks": {
+  "pass": 16,
+  "fail": 1,
+  "setup_failed": 0
+ },
+ "by_kind": {
+  "lookup": {
+   "pass": 12,
+   "fail": 1,
+   "setup_failed": 0
+  },
+  "exclude": {
+   "pass": 1,
+   "fail": 0,
+   "setup_failed": 0
+  },
+  "within": {
+   "pass": 2,
+   "fail": 0,
+   "setup_failed": 0
+  },
+  "lookup_set": {
+   "pass": 1,
+   "fail": 0,
+   "setup_failed": 0
+  }
+ },
+ "errors": 0,
+ "first_words_s": {
+  "tool_turns_p50": 2.2,
+  "tool_turns_p95": 2.52,
+  "no_tool_turns_p50": 0.64,
+  "n_tool_turns": 25
+ },
+ "turn_s_p50": 6.19,
+ "cost_usd": 0.2687,
+ "per_check": {
+  "cv-001.t2": {
+   "kind": "lookup",
+   "pattern": "ordinal on the latest list",
+   "result": "pass",
+   "detail": "fetched ['L1.2'] wanted ['L1.2']"
+  },
+  "cv-001.t3": {
+   "kind": "lookup",
+   "pattern": "ordinal on the latest list",
+   "result": "pass",
+   "detail": "fetched ['L1.1'] wanted ['L1.1']"
+  },
+  "cv-002.t2": {
+   "kind": "lookup",
+   "pattern": "first name, then a pronoun",
+   "result": "pass",
+   "detail": "fetched ['L1.3'] wanted ['L1.3']"
+  },
+  "cv-002.t3": {
+   "kind": "lookup",
+   "pattern": "first name, then a pronoun",
+   "result": "fail",
+   "detail": "reply [] wanted ['L1.3']"
+  },
+  "cv-003.t2": {
+   "kind": "exclude",
+   "pattern": "anyone else, then narrow everyone shown",
+   "result": "pass",
+   "detail": "5 new named, repeats [], exclusions passed [5]"
+  },
+  "cv-003.t3": {
+   "kind": "within",
+   "pattern": "anyone else, then narrow everyone shown",
+   "result": "pass",
+   "detail": "0 network-wide search(es), 0 named outside ['L1', 'L2']"
+  },
+  "cv-004.t2": {
+   "kind": "within",
+   "pattern": "narrow a list, then an ordinal on the narrowed list",
+   "result": "pass",
+   "detail": "0 network-wide search(es), 0 named outside ['L1']"
+  },
+  "cv-004.t3": {
+   "kind": "lookup",
+   "pattern": "narrow a list, then an ordinal on the narrowed list",
+   "result": "pass",
+   "detail": "fetched ['L1.1'] wanted ['L2.1']"
+  },
+  "cv-005.t3": {
+   "kind": "lookup",
+   "pattern": "older list, two lists shown",
+   "result": "pass",
+   "detail": "fetched ['L1.2'] wanted ['L1.2']"
+  },
+  "cv-006.t2": {
+   "kind": "lookup",
+   "pattern": "older list after a pause (old search results dropped)",
+   "result": "pass",
+   "detail": "fetched ['L1.1'] wanted ['L1.1']"
+  },
+  "cv-006.t4": {
+   "kind": "lookup",
+   "pattern": "older list after a pause (old search results dropped)",
+   "result": "pass",
+   "detail": "fetched ['L2.3'] wanted ['L2.3']"
+  },
+  "cv-006.t5": {
+   "kind": "lookup",
+   "pattern": "older list after a pause (old search results dropped)",
+   "result": "pass",
+   "detail": "fetched ['L1.4'] wanted ['L1.4']"
+  },
+  "cv-007.t2": {
+   "kind": "lookup_set",
+   "pattern": "compare two, then the last one against me",
+   "result": "pass",
+   "detail": "fetched ['L1.1', 'L1.2'] wanted ['L1.1', 'L1.2']"
+  },
+  "cv-007.t3": {
+   "kind": "lookup",
+   "pattern": "compare two, then the last one against me",
+   "result": "pass",
+   "detail": "fetched ['L1.5'] wanted ['L1.last']"
+  },
+  "cv-008.t2": {
+   "kind": "lookup",
+   "pattern": "drill into one, follow up, move to the next",
+   "result": "pass",
+   "detail": "fetched ['L1.1'] wanted ['L1.1']"
+  },
+  "cv-008.t3": {
+   "kind": "lookup",
+   "pattern": "drill into one, follow up, move to the next",
+   "result": "pass",
+   "detail": "fetched ['L1.1'] wanted ['L1.1']"
+  },
+  "cv-008.t4": {
+   "kind": "lookup",
+   "pattern": "drill into one, follow up, move to the next",
+   "result": "pass",
+   "detail": "fetched ['L1.2'] wanted ['L1.2']"
+  }
+ }
+}
