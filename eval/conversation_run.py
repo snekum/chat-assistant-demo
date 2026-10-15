@@ -281,13 +281,14 @@ def check(expect: dict, lists: dict, ev: dict, named: list[str], intro: dict | N
 
 def _consume(events, t0: float):
     """Drain one stream of screen events -> (reply first words, pre-tool text time, approval).
-    A drafted message counts as words on screen like a reply."""
+    A drafted message is not streamed (D-057): on a draft turn the time that matters is when the
+    checked draft reaches the card, recorded on the approval as card_s."""
     first = flash = approval = None
     shown = ""
     for kind, part in events:
         if kind == "approval":
-            approval = part
-        if kind not in ("partial", "draft"):
+            approval = {**part, "card_s": round(time.perf_counter() - t0, 2)}
+        if kind != "partial":
             continue
         # Partials only grow within one model call. Text that is not a continuation
         # came from a NEW call: what was on screen before it was text the model wrote
@@ -378,6 +379,7 @@ def run_conversation(chat, resolver, asker, conv: dict, tick: dict,
                    decision=(decided or {}).get("type"), sent=len(intro["sent"]),
                    factchecks=checks, sent_back=ev["sent_back"],
                    note=(approval or {}).get("note") or None,
+                   card_s=(approval or {}).get("card_s"),
                    unconfirmed_at_card="Still not confirmed" in (approval or {}).get(
                        "description", ""))
         rows.append(row)
@@ -417,6 +419,9 @@ def summarize(rows: list[dict]) -> dict:
                           "turns_showing_pre_tool_text": sum(1 for r in ran
                                                              if r.get("pre_tool_text_s"))},
         "turn_s_p50": pct([r["turn_s"] for r in ran], .5),
+        "draft_card_s": {"p50": pct([r.get("card_s") for r in ran], .5),
+                         "p95": pct([r.get("card_s") for r in ran], .95),
+                         "n": sum(1 for r in ran if r.get("card_s") is not None)},
         "cost_usd": round(sum(r["cost_usd"] or 0 for r in ran), 4),
         "factcheck": {
             "model": factcheck.MODEL, "version": factcheck.VERSION,
@@ -671,13 +676,18 @@ def selfcheck() -> None:
         [(r["cid"], r["turn"], r["dropped_through"]) for r in paused]
     print(f"2. the pause dropped old search results before the late reference "
           f"({[(r['cid'], r['turn'], r['dropped_through']) for r in paused]})")
-    timed = [r for r in right_rows if r.get("first_words_s") is not None]
+    # A reply turn is timed to its first words; a draft turn to its card (drafts are not
+    # streamed before the fact-check, D-057).
+    timed = [r for r in right_rows if r.get("first_words_s") is not None
+             or r.get("card_s") is not None]
     assert len(timed) == right["n_turns"], (len(timed), right["n_turns"])
+    assert all(r.get("first_words_s") is None for r in right_rows
+               if r.get("card_s") is not None), "draft text reached the screen before the card"
     ahead = [r for r in right_rows if r["turn"] == 1]
     assert all(r["pre_tool_text_s"] is not None and r["first_words_s"] > r["pre_tool_text_s"]
                for r in ahead), [(r["cid"], r["pre_tool_text_s"], r["first_words_s"]) for r in ahead]
     assert not any(r["pre_tool_text_s"] for r in right_rows if r["turn"] > 1)
-    print(f"3. first words timed on all {len(timed)} turns (streamed through the chat app's path); "
+    print(f"3. all {len(timed)} turns timed (first words, or time to the card on draft turns); "
           f"text written ahead of a tool call is not counted as first words ({len(ahead)} turns)")
     blob = json.dumps(right["per_check"]) + json.dumps(wrong["per_check"])
     assert not set(resolver.full_names(blob)), "a name reached the committable summary"

@@ -6,7 +6,7 @@ real, billed model call (~$0.01-0.03 per message at Haiku 4.5 prices).
 
 Quick and dirty on purpose: a member picker stands in for login, tool steps show while it
 works, the reply streams in as it is written (D-047: first words within 3 s), and "New chat"
-starts a fresh thread. Asked to message someone, the agent drafts it (streaming), then waits:
+starts a fresh thread. Asked to message someone, the agent drafts and fact-checks it, then waits:
 edit the text, "Approve and send" or "Don't send" (D-055; sending = a row in the outbox table).
 Conversations persist in Postgres, so a thread survives a restart of this app.
 """
@@ -43,17 +43,12 @@ def _drive(events, history: list, thread_id: str):
     """Screen updates for one stream of agent events -> (chat, thread, input box, approval
     panel, its note, the editable draft). A turn ends with the reply, or with a message
     waiting for the member's approval (D-055): then the panel opens with the draft in it."""
-    drafted = ""
     try:
         for kind, payload in events:
-            if kind == "status":        # under a draft (it is being checked), not over it
-                history[-1]["content"] = (f"{drafted}\n\n_{payload}..._" if drafted
-                                          else f"_{payload}..._")
+            if kind == "status":
+                history[-1]["content"] = f"_{payload}..._"
             elif kind == "partial":
                 history[-1]["content"] = render_partial(payload)
-            elif kind == "draft":       # the message being written, before it is complete
-                drafted = payload
-                history[-1]["content"] = f"_Drafting your message..._\n\n{payload} ▌"
             elif kind == "approval":
                 # D-058: a poor-fit heads-up stays in the conversation, not only on the card.
                 heads_up = f"_Heads-up: {payload['note']}_\n\n" if payload.get("note") else ""

@@ -645,8 +645,7 @@ class ChatService:
 
     def ask(self, thread_id: str, person_id: str, text: str):
         """Yields ("status", str) while tools run, ("partial", str) as the reply streams --
-        already checked, safe to show -- ("draft", str) while a message for the member is being
-        written, then exactly one of: ("reply", str), the stored reply, which is authoritative;
+        already checked, safe to show -- then exactly one of: ("reply", str), the stored reply, which is authoritative;
         or ("approval", dict), a message waiting for the member's decision (see decide).
         Typing while a message waits means "not that one": it is declined with their words as
         the reason, and the agent carries on from there (a redraft, usually)."""
@@ -710,36 +709,6 @@ def render_partial(text: str) -> str:
     if text.strip() and REFUSAL_STRING.startswith(text.strip()):
         text = ""   # maybe the refusal sentence opening a partial answer: wait for what follows
     return render_reply(text) + " ▌"
-
-
-def partial_json_string(raw: str, key: str) -> str:
-    """The value of string field `key` in a JSON object still being streamed (a tool call's
-    arguments arrive in pieces), decoded as far as it has arrived; "" before the field starts."""
-    m = re.search(rf'"{re.escape(key)}"\s*:\s*"', raw)
-    if not m:
-        return ""
-    out, i, simple = [], m.end(), {"n": "\n", "t": "\t", "r": "", "b": "", "f": "", '"': '"',
-                                     "\\": "\\", "/": "/"}
-    while i < len(raw):
-        ch = raw[i]
-        if ch == '"':
-            break
-        if ch != "\\":
-            out.append(ch)
-            i += 1
-            continue
-        if i + 1 >= len(raw):
-            break                                     # escape cut mid-way: wait for more
-        nxt = raw[i + 1]
-        if nxt == "u":
-            if i + 6 > len(raw):
-                break
-            out.append(chr(int(raw[i + 2:i + 6], 16)))
-            i += 6
-        else:
-            out.append(simple.get(nxt, nxt))
-            i += 2
-    return "".join(out)
 
 
 def pending_approval(agent, resolver, thread_id: str, asker: Asker) -> dict | None:
@@ -823,22 +792,14 @@ def _stream(agent, resolver, thread_id: str, asker: Asker, payload, new_msgs: li
             guard = StreamGuard(resolver, allowed)
         for tc in chunk.tool_call_chunks or []:
             tool_rounds.add(guard_id)             # a tool round: its text is not the reply
-            # A drafted message is a tool ARGUMENT, which would appear only once complete; it
-            # streams from the argument pieces instead (D-055 kept D-047's first words), checked
-            # by its own name guard like any reply.
-            c = calls.setdefault(tc.get("index") or 0, {"name": None, "args": "", "fed": 0,
-                                                       "guard": StreamGuard(resolver, allowed)})
-            c["name"] = c["name"] or tc.get("name")
-            c["args"] += tc.get("args") or ""
-            if c["name"] == "send_intro":
-                draft = partial_json_string(c["args"], "message")
-                if len(draft) == c["fed"]:
-                    continue
-                shown = c["guard"].feed(draft[c["fed"]:])
-                c["fed"] = len(draft)
-                if shown:
-                    first_words = first_words or time.perf_counter() - t0
-                    yield "draft", shown
+            # A drafted message is NOT shown while it is written: the fact-check (D-057) may send
+            # it back, and a member must never watch an unchecked claim stream past. The member
+            # sees statuses, then the checked draft on the approval card (D-056: slower is fine).
+            c = calls.setdefault(tc.get("index") or 0, {"name": None})
+            if c["name"] is None and tc.get("name"):
+                c["name"] = tc["name"]
+                if c["name"] == "send_intro":
+                    yield "status", "Drafting your message"
         if guard is None or guard_id in tool_rounds:
             continue
         shown = guard.feed(_text(chunk))
@@ -1256,13 +1217,14 @@ if __name__ == "__main__":
 
     agent = intro_agent([send(draft, "s4"), AIMessage(content="Sent.")])
     events = list(stream_turn(agent, resolver, "intro", asker, "Write to them again"))
-    drafts = [t for k, t in events if k == "draft"]
-    assert events[-1][0] == "approval" and len(drafts) > 2 and draft.startswith(drafts[-1]), events
-    assert all(a == b[:len(a)] for a, b in zip(drafts, drafts[1:])), "the draft must only grow"
+    statuses = [p for k, p in events if k == "status"]
+    assert events[-1][0] == "approval" and statuses[:2] == [
+        "Drafting your message", "Checking the draft against their profile"], events
+    assert not any(k in ("partial", "draft") for k, _ in events), "no draft text before the check"
     events = list(resume_turn(agent, resolver, "intro", asker, {"type": "approve"}))
     assert events[-1] == ("reply", "Sent.") and len(sent_box.sent) == 3, events
-    print(f"20. the draft streams on screen in {len(drafts)} pieces as it is written, the turn ends "
-          "waiting for approval, and approving finishes it")
+    print("20. no draft text reaches the screen before it is checked (statuses, then the card); "
+          "approving finishes the turn")
 
     # 21-22 -- the fact-check before the card (D-057), with the stub above.
     bad = draft.replace("scaling it.", "scaling it internationally.")
