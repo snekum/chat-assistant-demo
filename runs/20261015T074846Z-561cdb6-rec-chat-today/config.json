@@ -1,0 +1,29 @@
+{
+ "run_id": "20261015T074846Z-561cdb6-rec-chat-today",
+ "runner": "eval/recommend_chat.py",
+ "config": "today",
+ "git": {
+  "sha": "561cdb6",
+  "dirty": true
+ },
+ "query_input": {
+  "mode": "chat"
+ },
+ "agent": {
+  "model": "claude-haiku-4-5",
+  "model_picks": false,
+  "prompt_sha256": "131efbd4fa384f6a4db7300df56adeb5b832d911f197cbd6aa9e411a0083ea01",
+  "web": "off",
+  "candidates": 5,
+  "passages": 3,
+  "hybrid_search": true,
+  "clock": "fixed"
+ },
+ "asker_sha256_12": "d7486ec9d67e",
+ "answer_key": "answer_key_v3_haiku55.jsonl",
+ "questions": "recommend_questions.jsonl",
+ "questions_kept": [
+  "rec-001"
+ ],
+ "limit": 1
+}

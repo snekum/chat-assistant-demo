@@ -23,7 +23,9 @@ wiring). find_members ranks by evidence strength alone until that fork is decide
 """
 from __future__ import annotations
 
+import hashlib
 import logging
+import random
 import re
 import sys
 from datetime import datetime, timezone
@@ -62,6 +64,22 @@ TOP_N_MEMBERS = 5
 # TUNABLE(<=3 supporting chunks per member in aggregates, product rule "no dossier hogging"; symptom
 #         wrong: "why them" lines unsupported by the shown snippets -> raise)
 SNIPPETS_PER_MEMBER = 3
+
+# Model picks (D-053): instead of hybrid search's top 5 best-first, the chat model gets a wider
+# UNRANKED candidate list and chooses whom to recommend, by the rules in
+# prompts/agent/recommend-v1.md. Measured offline as an LLM reranker over hybrid's top 15
+# (ndcg@5 0.565 -> 0.713; real questions 9 wins, 0 losses); this is the form with no extra model
+# call. Only the chat agent turns it on (Toolbox(model_picks=...)); False = top 5, best first.
+MODEL_PICKS = False
+# TUNABLE(15 candidates = the offline reranker's pool; a perfect pick from hybrid's top 15 scores
+#   0.853. Symptom wrong: replies pass over strong people ranked 16-20 -> widen; tool results
+#   crowd the context or delay the first words -> narrow.)
+CANDIDATES_FOR_MODEL = 15
+# TUNABLE(2 passages per candidate, ~240 tokens; the offline judge saw a summary + 2 sections.
+#   Symptom wrong: recommendations explained with facts the passages do not hold -> raise to 3.)
+CANDIDATE_PASSAGES = 2
+CANDIDATES_NOTE = ("Candidates in no particular order -- not a ranking. Choose whom to recommend "
+                   "by the recommendation rules; never mention the ones you leave out.")
 
 # TUNABLE(6 people per evidence call; "compare five people" is a real ask, 268 is abuse. 6 x 5
 #         chunks x ~200 tok ~= 6k tok of context. Symptom wrong: legitimate group asks bounce ->
@@ -111,11 +129,12 @@ class Toolbox:
             return TOOL_SCHEMAS
         return [t for t in TOOL_SCHEMAS if t["name"] != "web_search"]
 
-    def __init__(self, emb, conn, resolver: Resolver, asker: str):
+    def __init__(self, emb, conn, resolver: Resolver, asker: str, model_picks: bool = False):
         self.emb = emb
         self.conn = conn
         self.resolver = resolver
         self.asker = asker
+        self.model_picks = model_picks   # D-053: find_members returns unranked candidates
 
     # --- appointment ------------------------------------------------------------------------
 
@@ -233,6 +252,7 @@ class Toolbox:
         ts = _now()
 
         per_person: dict[str, list[CorpusEvidence]] = {}
+        limit, unranked = TOP_N_MEMBERS, False
         if within_person_ids is not None:
             # Narrowing a list the member already saw: every listed person is searched
             # person-scoped, so nobody drops out by losing a global ranking race.
@@ -248,11 +268,18 @@ class Toolbox:
             ranked = sorted(per_person.items(), key=lambda kv: -max(e.score for e in kv[1]))
             considered = len(per_person)
         elif HYBRID_SEARCH:
+            unranked = self.model_picks
+            limit = CANDIDATES_FOR_MODEL if unranked else TOP_N_MEMBERS
             order, sections = hybrid.rank_people(
-                self.conn, qvec, criterion, SCHEME, keep=lambda p: p not in excluded,
-                top=TOP_N_MEMBERS, per_person=SNIPPETS_PER_MEMBER)
+                self.conn, qvec, criterion, SCHEME, keep=lambda p: p not in excluded, top=limit,
+                per_person=CANDIDATE_PASSAGES if unranked else SNIPPETS_PER_MEMBER)
             ranked = [(pid, [self._as_evidence(r, ts) for r in sections[pid]])
-                      for pid in order[:TOP_N_MEMBERS]]
+                      for pid in order[:limit]]
+            if unranked:
+                # Shuffled so the model judges every candidate instead of trusting search order
+                # (the offline reranker saw a shuffled list); seeded by the criterion so the same
+                # search always shows the same order -- reproducible evals, stable cache prefix.
+                random.Random(hashlib.sha256(criterion.encode()).hexdigest()).shuffle(ranked)
             considered = len(order)
         else:
             # Pre-D-051 ranking (the rollback path): a person = their single best section.
@@ -273,13 +300,14 @@ class Toolbox:
                 "best_score": round(max(e.score for e in items), 4),
                 "snippets": items,
             }
-            for pid, items in ranked[:TOP_N_MEMBERS]
+            for pid, items in ranked[:limit]
         ]
         return {
             "ok": True,
             "members": members,
             "evidence": [e for m in members for e in m["snippets"]],
             "candidates_considered": considered,
+            **({"order": "unranked", "note": CANDIDATES_NOTE} if unranked else {}),
         }
 
     def web_search(self, query: str, kind: str = "news") -> dict:

@@ -1,0 +1,60 @@
+{
+ "run_id": "20261015T043319Z-561cdb6-rec-live-hybrid_sum3",
+ "runner": "eval/recommend_eval.py",
+ "method": "hybrid_sum3",
+ "git": {
+  "sha": "561cdb6",
+  "dirty": true
+ },
+ "answer_key": "answer_key_v3_haiku55.jsonl",
+ "rubric": "v3",
+ "grader": "claude-haiku-5-5",
+ "questions_kept": [
+  "rec-001",
+  "rec-002",
+  "rec-003",
+  "rec-004",
+  "rec-005",
+  "rec-006",
+  "rec-007",
+  "rec-008",
+  "rec-009",
+  "rec-010",
+  "rec-011",
+  "rec-013",
+  "rec-014",
+  "rec-015",
+  "rec-016",
+  "rec-017",
+  "rec-019",
+  "rec-020",
+  "rec-021",
+  "rec-022",
+  "rec-024",
+  "rec-027",
+  "rec-028",
+  "rec-029",
+  "rec-030",
+  "rec-031",
+  "rec-032",
+  "rec-034",
+  "rec-035",
+  "rec-036",
+  "rec-037",
+  "rec-038",
+  "rec-039",
+  "rec-040"
+ ],
+ "shown": 5,
+ "gain": {
+  "0": 0,
+  "1": 1,
+  "2": 3
+ },
+ "max_share_of_2s": 0.5,
+ "query_input": {
+  "mode": "live",
+  "file": "needs_haiku45_20261014T204144Z.jsonl",
+  "sha256": "c2b43872512cbc968439d7eb6229e171fb560884913979e6c90c25bb86de3a86"
+ }
+}

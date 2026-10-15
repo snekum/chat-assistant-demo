@@ -37,8 +37,12 @@ from contracts import REFUSAL_STRING  # noqa: E402
 MODEL = "claude-haiku-4-5"            # = agent.AGENT_MODEL
 PRICE = (1.0, 5.0)                    # $/MTok in, out (standard rate, 2026-10)
 QUESTIONS = ROOT / "eval" / "recommend_questions.jsonl"
-SYSTEM = (ROOT / "prompts" / "agent" / "core-v1.md").read_text(encoding="utf-8") \
-    .replace("\r\n", "\n").strip().format(refusal_string=REFUSAL_STRING)
+# The agent's own assembly (web off: the recommendation gold is corpus-only), so a recording
+# mirrors whatever prompt the product runs -- including the D-053 recommendation rules when
+# tools.MODEL_PICKS is on -- and the staleness check in recommend_eval sees any change.
+import agent  # noqa: E402
+
+SYSTEM = agent.base_prompt(web_enabled=False)
 
 _DESCRIPTION = ("Discover members of the network who match a criterion (an industry, an "
                 "experience, a company, a deal). The member you are speaking with is never "
@@ -68,6 +72,15 @@ SPLIT_TOOL = {
                 "The asker's own situation if they describe it (industry, stage, place), in a "
                 "few words. Empty if none.")},
         }}}
+
+
+def live_tool_matches_agent() -> bool:
+    """LIVE_TOOL copies agent.find_members' description by hand; True while the agent's source
+    still contains it (whitespace-insensitive). False = the recording mirrors an old tool."""
+    src = " ".join((ROOT / "src" / "agent.py").read_text(encoding="utf-8").split())
+    texts = [LIVE_TOOL["description"],
+             LIVE_TOOL["input_schema"]["properties"]["criterion"]["description"]]
+    return all(" ".join(t.split()) in src for t in texts)
 
 
 def _params(tool: dict, question: str) -> dict:

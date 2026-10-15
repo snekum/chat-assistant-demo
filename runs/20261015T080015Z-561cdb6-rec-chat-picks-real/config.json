@@ -1,0 +1,39 @@
+{
+ "run_id": "20261015T080015Z-561cdb6-rec-chat-picks-real",
+ "runner": "eval/recommend_chat.py",
+ "config": "picks",
+ "git": {
+  "sha": "561cdb6",
+  "dirty": true
+ },
+ "query_input": {
+  "mode": "chat"
+ },
+ "agent": {
+  "model": "claude-haiku-4-5",
+  "model_picks": true,
+  "prompt_sha256": "65e753d0725c7cab1513cd72b43342b38ea09cad5792086b69849bb4cae7ddc9",
+  "web": "off",
+  "candidates": 15,
+  "passages": 2,
+  "hybrid_search": true,
+  "clock": "fixed"
+ },
+ "asker_sha256_12": "d7486ec9d67e",
+ "answer_key": "answer_key_v3_haiku55.jsonl",
+ "questions": "recommend_questions.jsonl",
+ "questions_kept": [
+  "rec-001",
+  "rec-002",
+  "rec-003",
+  "rec-004",
+  "rec-005",
+  "rec-006",
+  "rec-007",
+  "rec-008",
+  "rec-009",
+  "rec-010"
+ ],
+ "limit": null,
+ "subset": "real"
+}

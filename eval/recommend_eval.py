@@ -16,7 +16,12 @@ Metrics, per question, then averaged:
 Questions dropped (D-050 follow-up, assistant rule): no member graded 2 (cannot test "found the
 best"), or more than half the network graded 2 (every method looks perfect).
 
-Usage:  python eval/recommend_eval.py <method> [<method> ...]   (see METHODS)
+Search input (D-052): every method searches with the chat model's own wording of the question --
+the find_members criterion it writes, recorded once per question in LIVE_QUERIES and frozen, so
+runs stay comparable -- because that is what the product sends. Runs before D-052 searched with
+the raw question; `--raw` reproduces them. Every run records its input in config.json.
+
+Usage:  python eval/recommend_eval.py <method> [<method> ...] [--raw]   (see METHODS)
         python eval/recommend_eval.py compare <run_a> <run_b> [metric]
 Writes runs/<ts>-<sha>-rec-<method>/ : config.json + summary.json (metrics only, committable) and
 results.jsonl (ranked person_ids per question -- gitignored by the runs/** rule).
@@ -43,6 +48,11 @@ GAIN = {0: 0, 1: 1, 2: 3}
 # TUNABLE(drop a question when more than half the network is "clearly useful": every method
 #   scores ~perfect on it. Symptom wrong: a kept question shows ndcg@5 ~1.0 for every method.)
 MAX_SHARE_OF_2S = 0.5
+# The recorded chat-model wording per question (eval/split_needs.py), PINNED by name: a new
+# recording never changes the baseline silently. Re-record (~$0.04, Batch API) and re-pin when the
+# agent prompt or the find_members description changes -- _splits() warns when they have.
+LIVE_QUERIES = ROOT / "analysis" / "needs_haiku45_20261014T204144Z.jsonl"
+QUERY_INPUT = "live"         # "raw" = the question as typed (every run before D-052)
 
 
 def load_key() -> tuple[dict[str, dict[str, int]], list[dict]]:
@@ -98,7 +108,8 @@ def method_dense(conn, emb, agg: str = "max"):
     """Meaning-based search; agg "max" is today's member search (find_members' ordering,
     extended past its 5-person cap so recall@k can look deeper)."""
     def rank(question: str) -> list[str]:
-        return _rank({p: AGG[agg](s) for p, s in _dense_people(conn, emb, question).items()})
+        return _rank({p: AGG[agg](s)
+                      for p, s in _dense_people(conn, emb, query_of(question)).items()})
     return rank
 
 
@@ -110,7 +121,7 @@ def method_bm25(conn, emb):
 
     def rank(question: str) -> list[str]:
         best: dict[str, float] = {p: 0.0 for p in everyone}
-        for p, s in zip(section_people, index.scores(question)):
+        for p, s in zip(section_people, index.scores(query_of(question))):
             best[p] = max(best[p], s)
         return _rank(best)
     return rank
@@ -121,54 +132,70 @@ def method_hybrid(conn, emb, agg: str = "max"):
     ranking (src/hybrid.rank_people, D-051); other aggs compose the same primitives."""
     from tools import SCHEME
     if agg == "sum3":
-        return lambda q: rank_people(conn, emb.embed_query(q), q, SCHEME)[0]
+        return lambda q: rank_people(conn, emb.embed_query(query_of(q)), query_of(q), SCHEME)[0]
     dense, keyword = method_dense(conn, emb, agg), method_bm25(conn, emb)
     return lambda question: _rrf(dense(question), keyword(question))
 
 
-def method_rerank(conn, emb, model_name: str, agg: str, unit: str = "sections",
-                  live: bool = False):
+def method_rerank(conn, emb, model_name: str, agg: str, unit: str = "sections"):
     """Cross-encoder re-orders hybrid_sum3's top rerank.POOL people (src/rerank.py); people past
-    the pool keep hybrid order, so recall@50 equals the pool's by construction. live=True: both
-    the pool and the reranker get the chat model's search phrase (as the product would), and the
-    fair baseline is then live_criterion, not hybrid_sum3."""
+    the pool keep hybrid order, so recall@50 equals the pool's by construction. The pool and the
+    reranker both get query_of(question) -- what find_members would receive."""
     from importlib.metadata import version
 
     import rerank
     from tools import SCHEME
-    name, by_q = _splits() if live else (None, {})
-
     def rank(question: str) -> list[str]:
-        text = by_q[question]["live"]["criterion"] if question in by_q else question
+        text = query_of(question)
         return rerank.rerank_people(conn, emb.embed_query(text), text, SCHEME,
                                     model_name, agg, unit=unit)[0]
     rank.stats = lambda: rerank.STATS
     rank.config = {"rerank": {"model": rerank.MODELS[model_name], "agg": agg, "unit": unit,
                               "pool": rerank.POOL, "per_person": rerank.PER_PERSON,
                               "max_tokens": rerank.MAX_TOKENS[model_name],
-                              "device": rerank.device(), "dtype": rerank.dtype(model_name),
-                              "query": "live criterion" if live else "raw question",
-                              **({"needs_file": name} if live else {})},
+                              "device": rerank.device(), "dtype": rerank.dtype(model_name)},
                    "rerank_stack": {p: version(p) for p in
                                     ("sentence-transformers", "transformers", "torch")}}
     return rank
 
 
 def _splits() -> tuple[str, dict[str, dict]]:
-    """The newest analysis/needs_haiku45_*.jsonl covering every scored question (eval/
-    split_needs.py): what the chat model would put in a find_members call, keyed by question."""
+    """LIVE_QUERIES keyed by question: what the chat model put in its find_members call (today's
+    tool: "live"; the needs/exclusions variant: "split"). Warns, never blocks, when the agent
+    prompt or tool description changed since the recording."""
+    import hashlib
+
+    import split_needs
     kept = {q["question"] for q in load_key()[1]}
-    for path in sorted((ROOT / "analysis").glob("needs_haiku45_*.jsonl"), reverse=True):
-        rows = [json.loads(l) for l in path.read_text(encoding="utf-8").splitlines() if l]
-        by_q = {r["question"]: r for r in rows if "live" in r and "split" in r}
-        if kept <= set(by_q):
-            return path.name, by_q
-    raise FileNotFoundError("no complete needs file -- run eval/split_needs.py submit/collect")
+    rows = [json.loads(l) for l in LIVE_QUERIES.read_text(encoding="utf-8").splitlines() if l]
+    by_q = {r["question"]: r for r in rows if "live" in r and "split" in r}
+    if not kept <= set(by_q):
+        raise FileNotFoundError(f"{LIVE_QUERIES.name} misses scored questions -- re-record")
+    now = split_needs._stamp()
+    stale = [k for k in ("system_sha256", "split_tool_sha256") if rows[0].get(k) != now[k]]
+    if not split_needs.live_tool_matches_agent():
+        stale.append("find_members description")
+    if stale:
+        print(f"!! {LIVE_QUERIES.name} is STALE ({', '.join(stale)} changed since recording): the "
+              "chat model would now word its searches differently -- re-record and re-pin.")
+    _splits.sha256 = hashlib.sha256(LIVE_QUERIES.read_bytes()).hexdigest()
+    return LIVE_QUERIES.name, by_q
+
+
+def query_of(question: str) -> str:
+    """The text a method searches with: the recorded chat-model wording (QUERY_INPUT "live") or
+    the question as typed ("raw"). Unrecorded text (the warm-up) passes through unchanged."""
+    if QUERY_INPUT == "raw":
+        return question
+    if not hasattr(query_of, "by_q"):
+        query_of.by_q = _splits()[1]
+    row = query_of.by_q.get(question)
+    return row["live"]["criterion"] if row else question
 
 
 def method_live_criterion(conn, emb):
-    """Diagnostic: hybrid on the search phrase the chat model writes for today's find_members,
-    instead of the raw question every other arm searches with."""
+    """Hybrid on the chat model's recorded wording whatever QUERY_INPUT says -- the diagnostic
+    that led to D-052 (under the live input it equals hybrid_sum3; kept so the old run reproduces)."""
     from tools import SCHEME
     name, by_q = _splits()
 
@@ -188,7 +215,7 @@ def method_needs(conn, emb, mode: str):
 
     def rank(question: str) -> list[str]:
         s = by_q.get(question, {}).get("split", {})
-        return needs.rank_by_needs(conn, emb, question, s.get("needs", []),
+        return needs.rank_by_needs(conn, emb, query_of(question), s.get("needs", []),
                                    s.get("exclude_topics", []), s.get("asker_context", ""),
                                    SCHEME, mode)
     rank.config = {"needs_file": name, "split_model": next(iter(by_q.values()))["model"],
@@ -196,7 +223,35 @@ def method_needs(conn, emb, mode: str):
     return rank
 
 
+def method_llm(conn, emb, variant: str):
+    """LLM reranker (eval/llm_rerank.py): Haiku 4.5's ordering of hybrid's top 15 on the live
+    input, read from the newest complete analysis/llm_rerank_<variant>_*.jsonl (the rankings are
+    produced by a batch job, so this arm only scores them)."""
+    import hashlib
+    kept = {q["question"] for q in load_key()[1]}
+    for path in sorted((ROOT / "analysis").glob(f"llm_rerank_{variant}_*.jsonl"), reverse=True):
+        rows = {r["question"]: r for r in map(json.loads, path.read_text(encoding="utf-8").splitlines())}
+        if kept <= set(rows):
+            break
+    else:
+        raise FileNotFoundError(f"no complete llm_rerank_{variant} file -- run eval/llm_rerank.py")
+    if QUERY_INPUT != "live":
+        raise ValueError("the LLM rankings were made on the live input; --raw would mislabel them")
+
+    def rank(question: str) -> list[str]:
+        return rows[question]["ranked"] if question in rows else []
+    first = next(iter(rows.values()))
+    rank.config = {"llm_rerank": {"variant": variant, "file": path.name,
+                                  "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+                                  "model": first["model"], "pool": first["pool"],
+                                  "batch_id": first["batch_id"],
+                                  "letters_repaired": sum(r["repaired"] for r in rows.values())}}
+    return rank
+
+
 METHODS = {"dense": method_dense, "bm25": method_bm25,
+           "llm_rules": lambda c, e: method_llm(c, e, "rules"),
+           "llm_plain": lambda c, e: method_llm(c, e, "plain"),
            "live_criterion": method_live_criterion,
            **{f"needs_{m}": (lambda m: lambda c, e: method_needs(c, e, m))(m)
               for m in ("rrf", "min", "rrf_ctx")},
@@ -207,8 +262,7 @@ METHODS = {"dense": method_dense, "bm25": method_bm25,
               for a in ("sum2", "sum3", "mean3")},
            **{f"ce_{m}_{a}": (lambda m, a: lambda c, e: method_rerank(c, e, m, a))(m, a)
               for m in ("minilm", "bge") for a in ("max", "sum3")},
-           "ce_m3_profile": lambda c, e: method_rerank(c, e, "m3", "max", "profile"),
-           "ce_m3_profile_live": lambda c, e: method_rerank(c, e, "m3", "max", "profile", True)}
+           "ce_m3_profile": lambda c, e: method_rerank(c, e, "m3", "max", "profile")}
 
 
 def compare(run_a: str, run_b: str, metric: str = "ndcg@5") -> None:
@@ -220,7 +274,12 @@ def compare(run_a: str, run_b: str, metric: str = "ndcg@5") -> None:
     author = {q["id"]: q.get("author") for q in
               (json.loads(l) for l in QUESTIONS.read_text(encoding="utf-8").splitlines() if l)}
     rng = random.Random(0)
+    inputs = [json.loads((ROOT / "runs" / r / "config.json").read_text()).get(
+        "query_input", {"mode": "raw"})["mode"] for r in (run_a, run_b)]   # pre-D-052 = raw
     print(f"{run_b.split('-rec-')[-1]} vs {run_a.split('-rec-')[-1]} on {metric}:")
+    if inputs[0] != inputs[1]:
+        print(f"  !! different search inputs ({run_a.split('-rec-')[-1]}: {inputs[0]}, "
+              f"{run_b.split('-rec-')[-1]}: {inputs[1]}) -- not a like-for-like comparison")
     # Real users' questions and assistant-drafted ones are reported apart: drafted questions
     # skewed keyword-friendly once already, so they never decide a comparison alone.
     for label, keep in (("all", lambda q: True), ("real", lambda q: author.get(q) != "assistant"),
@@ -263,7 +322,8 @@ def main(method: str) -> None:
                          cwd=ROOT).stdout.strip()
     dirty = bool(subprocess.run(["git", "status", "--porcelain"],
                                 capture_output=True, text=True, cwd=ROOT).stdout.strip())
-    run_id = f"{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}-{sha}-rec-{method}"
+    tag = f"live-{method}" if QUERY_INPUT == "live" else method   # raw keeps the pre-D-052 name
+    run_id = f"{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}-{sha}-rec-{tag}"
     out = ROOT / "runs" / run_id
     out.mkdir(parents=True)
     (out / "config.json").write_text(json.dumps({
@@ -271,7 +331,11 @@ def main(method: str) -> None:
         "git": {"sha": sha, "dirty": dirty},
         "answer_key": KEY.name, "rubric": "v3", "grader": "claude-haiku-5-5",
         "questions_kept": [q["id"] for q in kept], "shown": SHOWN, "gain": GAIN,
-        "max_share_of_2s": MAX_SHARE_OF_2S, **getattr(rank, "config", {})},
+        "max_share_of_2s": MAX_SHARE_OF_2S,
+        "query_input": ({"mode": "raw"} if QUERY_INPUT == "raw" else
+                        {"mode": "live", "file": LIVE_QUERIES.name,
+                         "sha256": getattr(_splits, "sha256", None)}),
+        **getattr(rank, "config", {})},
         indent=1), encoding="utf-8")
     p95 = sorted(times)[math.ceil(0.95 * len(times)) - 1]
     (out / "summary.json").write_text(json.dumps({
@@ -298,5 +362,7 @@ if __name__ == "__main__":
     if sys.argv[1] == "compare":
         compare(*sys.argv[2:])
     else:
-        for m in sys.argv[1:]:          # several arms in one process share the reranker memo
+        if "--raw" in sys.argv:
+            QUERY_INPUT = "raw"
+        for m in [a for a in sys.argv[1:] if a != "--raw"]:   # one process shares the memo
             main(m)

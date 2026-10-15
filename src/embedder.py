@@ -15,10 +15,19 @@ so the interface is honest without building the path we didn't take.
 from __future__ import annotations
 
 import hashlib
+import threading
 from pathlib import Path
 from typing import Protocol
 
 import numpy as np
+
+# The local model is NOT thread-safe: its rotary-embedding cache is shared state, and two threads
+# embedding texts of different lengths at once corrupt it ("RuntimeError: The size of tensor a (13)
+# must match the size of tensor b (12)") -- reproduced 2026-10-15, 45 of 60 concurrent calls
+# failed. The chat agent runs parallel tool calls in threads, so two searches in one step could
+# crash a member's turn. One lock serialises loading and encoding (~56 ms per query); cache hits
+# never take it.
+_MODEL_LOCK = threading.RLock()
 
 # Anchored to the repo root, not the working directory: a relative path silently started a
 # second, empty cache whenever a module was run from inside src/.
@@ -98,6 +107,10 @@ class NomicLocal:
         self._ensure_model()
 
     def _ensure_model(self):
+        with _MODEL_LOCK:
+            return self._load()
+
+    def _load(self):
         if self._model is None:
             from sentence_transformers import SentenceTransformer
 
@@ -119,13 +132,14 @@ class NomicLocal:
         return self._model
 
     def _encode(self, prefixed: list[str]) -> np.ndarray:
-        return self._ensure_model().encode(
-            prefixed,
-            batch_size=self.batch_size,
-            normalize_embeddings=True,
-            convert_to_numpy=True,
-            show_progress_bar=False,
-        ).astype(np.float32)
+        with _MODEL_LOCK:
+            return self._ensure_model().encode(
+                prefixed,
+                batch_size=self.batch_size,
+                normalize_embeddings=True,
+                convert_to_numpy=True,
+                show_progress_bar=False,
+            ).astype(np.float32)
 
     def _embed(self, texts: list[str], role: str, prefix: str) -> np.ndarray:
         out: list[np.ndarray | None] = [None] * len(texts)

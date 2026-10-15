@@ -1,0 +1,67 @@
+{
+ "n_questions": 10,
+ "overall": {
+  "ndcg@5": 0.679,
+  "useful@5": 0.76,
+  "best@5": 0.54
+ },
+ "named_mean": 5.1,
+ "no_find_members": 0,
+ "errors": 0,
+ "turn_s_p50": 11.03,
+ "turn_s_p95": 13.66,
+ "cost_usd": 0.2149,
+ "input_tokens_mean": 16152,
+ "per_question": {
+  "rec-001": {
+   "ndcg@5": 0.467,
+   "useful@5": 0.6,
+   "best@5": 0.2
+  },
+  "rec-002": {
+   "ndcg@5": 0.503,
+   "useful@5": 0.8,
+   "best@5": 0.2
+  },
+  "rec-003": {
+   "ndcg@5": 1.0,
+   "useful@5": 1.0,
+   "best@5": 1.0
+  },
+  "rec-004": {
+   "ndcg@5": 0.857,
+   "useful@5": 1.0,
+   "best@5": 0.8
+  },
+  "rec-005": {
+   "ndcg@5": 0.553,
+   "useful@5": 0.4,
+   "best@5": 0.4
+  },
+  "rec-006": {
+   "ndcg@5": 0.553,
+   "useful@5": 0.4,
+   "best@5": 0.4
+  },
+  "rec-007": {
+   "ndcg@5": 0.869,
+   "useful@5": 0.8,
+   "best@5": 0.8
+  },
+  "rec-008": {
+   "ndcg@5": 0.913,
+   "useful@5": 1.0,
+   "best@5": 0.8
+  },
+  "rec-009": {
+   "ndcg@5": 0.815,
+   "useful@5": 1.0,
+   "best@5": 0.6
+  },
+  "rec-010": {
+   "ndcg@5": 0.262,
+   "useful@5": 0.6,
+   "best@5": 0.2
+  }
+ }
+}
