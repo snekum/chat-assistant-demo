@@ -55,11 +55,13 @@ def _drive(events, history: list, thread_id: str):
                 drafted = payload
                 history[-1]["content"] = f"_Drafting your message..._\n\n{payload} ▌"
             elif kind == "approval":
-                history[-1]["content"] = (
+                # D-058: a poor-fit heads-up stays in the conversation, not only on the card.
+                heads_up = f"_Heads-up: {payload['note']}_\n\n" if payload.get("note") else ""
+                history[-1]["content"] = heads_up + (
                     f"Here's a draft to **{payload['recipient_name']}**. Edit it below if you "
                     "like, then approve to send. Nothing goes out until you do.")
                 yield (history, thread_id, "", gr.update(visible=True),
-                       f"**{payload['description']}**", payload["message"])
+                       payload["description"], payload["message"])
                 return
             else:  # the stored reply is authoritative: links in, guard decisions applied
                 history[-1]["content"] = render_reply(payload, svc.links(thread_id))

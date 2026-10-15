@@ -223,7 +223,8 @@ def check_intro(expect: dict, lists: dict, ev: dict, intro: dict) -> dict:
               f" ({words} words{', over 150' if words > 150 else ''}), {how} -> {len(sent)} sent"
               + (f", {ev['sent_back']} rewrite(s) after the fact-check" if ev["sent_back"] else "")
               + (", reached the card UNCONFIRMED" if "Still not confirmed" in
-                 waiting.get("description", "") else ""))
+                 waiting.get("description", "") else "")
+              + (", with a poor-fit heads-up" if waiting.get("note") else ""))
     return {"result": "fail" if problems else "pass",
             "detail": detail + ("; " + "; ".join(problems) if problems else "")}
 
@@ -376,6 +377,7 @@ def run_conversation(chat, resolver, asker, conv: dict, tick: dict,
                    draft=draft or None, draft_words=len(draft.split()) if draft else None,
                    decision=(decided or {}).get("type"), sent=len(intro["sent"]),
                    factchecks=checks, sent_back=ev["sent_back"],
+                   note=(approval or {}).get("note") or None,
                    unconfirmed_at_card="Still not confirmed" in (approval or {}).get(
                        "description", ""))
         rows.append(row)
@@ -423,6 +425,7 @@ def summarize(rows: list[dict]) -> dict:
             "errors": sum(1 for r in ran for c in r.get("factchecks", []) if c["ok"] is None),
             "rewrites": sum(r.get("sent_back", 0) for r in ran),
             "unconfirmed_at_card": sum(1 for r in ran if r.get("unconfirmed_at_card")),
+            "heads_ups": sum(1 for r in ran if r.get("note")),
             "seconds_p50": pct([c["seconds"] for r in ran for c in r.get("factchecks", [])], .5),
             "cost_usd": round(sum(c["cost_usd"] for r in ran for c in r.get("factchecks", [])), 4)},
         "per_check": checks}
