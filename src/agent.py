@@ -56,7 +56,7 @@ from typing_extensions import Annotated, NotRequired
 import hybrid
 import store
 from contracts import REFUSAL_STRING
-from tools import MODEL_PICKS, SCHEME, WEB_SEARCH_ENABLED, Toolbox
+from tools import MAX_PERSONS_PER_CALL, MODEL_PICKS, SCHEME, WEB_SEARCH_ENABLED, Toolbox
 
 log = logging.getLogger("agent")
 
@@ -112,6 +112,16 @@ def web_cite(url: str, published: str | None) -> tuple[str, str]:
     return f"[web: {domain}, {date}]", _cite_key(domain, date)
 
 
+def _drop_refusal_opener(text: str) -> str:
+    """The model sometimes opens a PARTIAL answer with the refusal sentence ("I don't have
+    information on that. What I can tell you is..."), which reads as a contradiction. On screen
+    the sentence goes when more text follows; the stored reply keeps it, so the refusal rule in
+    the evals sees what the model wrote. A prompt rule against it did not hold (2026-10-15)."""
+    s = text.lstrip()
+    rest = s[len(REFUSAL_STRING):] if s.startswith(REFUSAL_STRING) else ""
+    return rest.lstrip() if rest.strip() else text
+
+
 def render_reply(text: str, links: dict[str, str] | None = None) -> str:
     """What the member sees. Never feed this to the eval, the judge or the name check.
     `links` maps cite keys to URLs (ChatService.links): a web tag with a known URL becomes a
@@ -120,7 +130,7 @@ def render_reply(text: str, links: dict[str, str] | None = None) -> str:
         url = (links or {}).get(_cite_key(m.group(1), m.group(2)))
         return f"([{m.group(1).strip()}]({url}))" if url else m.group(0)
 
-    cleaned = _WEB_TAG.sub(_link, _HIDDEN_TAG.sub("", text))
+    cleaned = _WEB_TAG.sub(_link, _drop_refusal_opener(_HIDDEN_TAG.sub("", text)))
     lines = (re.sub(r"[ \t]{2,}", " ", line).rstrip() for line in cleaned.splitlines())
     return "\n".join(lines).strip()
 
@@ -327,6 +337,16 @@ def build_agent(emb, conn, resolver, checkpointer, model=None, web_enabled=WEB_S
         # message asks for a brief. The model set the flag for "hmm maybe more about the first
         # guy?" twice in two replays -- once as `full_dossier`, once renamed.
         whole = meeting_prep_brief and bool(BRIEF_INTENT.search(_last_user_text(runtime)))
+        if len(person_refs or []) > MAX_PERSONS_PER_CALL and not whole:
+            # "Out of everyone you've mentioned (10 people), who...?" arrives here with all 10.
+            # Bouncing it cost a round and pushed first words past 4 s twice (2026-10-15), and
+            # an error that pointed at the right tool still left the wasted call. So it IS the
+            # right tool: the list narrowed to the people most relevant to the query.
+            out = box.find_members(query, within_person_ids=person_refs)
+            if out.get("ok"):
+                out["note"] = (f"{len(person_refs)} people is too many to look up one by one; "
+                               "these are the ones most relevant to the query.")
+            return _model_view(out)
         return _model_view(box.get_person_evidence(query, person_refs, whole))
 
     @tool
@@ -464,6 +484,8 @@ def render_partial(text: str) -> str:
     flash as raw brackets before render_reply could hide it), then the usual rendering."""
     if text.rfind("[") > text.rfind("]"):
         text = text[:text.rfind("[")]
+    if text.strip() and REFUSAL_STRING.startswith(text.strip()):
+        text = ""   # maybe the refusal sentence opening a partial answer: wait for what follows
     return render_reply(text) + " ▌"
 
 
@@ -788,4 +810,26 @@ if __name__ == "__main__":
     assert "Recommending members" in base_prompt(False, True) \
         and "Recommending members" not in base_prompt(False, False)
     print("14. model picks: 15 unranked candidates + rules when on; top 5 best-first when off")
+
+    # 15 -- too many people in one lookup: the error steers to narrowing the shown list.
+    names = [resolver.name_of[p] for p in ids[1:8]]
+    script = [AIMessage(content="", tool_calls=[{"name": "get_person_evidence", "id": "tm",
+                                                 "args": {"query": "manufacturing",
+                                                          "person_refs": names}}]),
+              AIMessage(content="ok")]
+    msgs, _ = run(script, f"Which of {', '.join(names)} has manufacturing experience?",
+                  thread="too-many")
+    out = json.loads(next(_text(m) for m in msgs if isinstance(m, ToolMessage)))
+    picked = {m["person_id"] for m in out.get("members", [])}
+    assert out.get("ok") and out.get("note") and picked and         picked <= {p for p in ids[1:8]}, out
+    print(f"15. a lookup over {len(names)} people becomes one narrowing search: the "
+          f"{len(picked)} most relevant of them, no bounced call")
+
+    # 16 -- the refusal sentence opening a partial answer is hidden on screen (stored text keeps
+    # it); a reply that IS the refusal sentence still shows it; streaming waits it out.
+    partial = f"{REFUSAL_STRING} What I can tell you is that it was bootstrapped [profile: X]."
+    assert render_reply(partial) == "What I can tell you is that it was bootstrapped."
+    assert render_reply(REFUSAL_STRING) == REFUSAL_STRING
+    assert render_partial("I don't have ") == " ▌" and render_partial("I found three ") != " ▌"
+    print("16. a partial answer is shown without the refusal sentence in front of it")
     print("agent self-check passed")

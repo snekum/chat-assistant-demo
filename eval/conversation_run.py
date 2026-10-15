@@ -26,6 +26,7 @@ to first words on screen (D-047). The eval owns the clock: +30 s per turn, plus 
 
 Usage:  python eval/conversation_run.py               (paid; all conversations)
         EVAL_LIMIT=1 python eval/conversation_run.py  (first N conversations)
+        EVAL_ONLY=cv-002,cv-003 python eval/conversation_run.py   (named conversations)
         python eval/conversation_run.py --selfcheck   (offline: scripted model, real DB + tools)
 Writes runs/<ts>-<sha>-conv/ (config + summary committable and name-free -- people appear as list
 positions like "L1.3"; results.jsonl, which holds the replies, gitignored).
@@ -67,6 +68,7 @@ from langchain_core.messages import AIMessage, HumanMessage, ToolMessage  # noqa
 
 CONVERSATIONS = ROOT / "eval" / "conversations.jsonl"
 LIMIT = int(os.environ.get("EVAL_LIMIT", "0")) or None
+ONLY = [c for c in os.environ.get("EVAL_ONLY", "").split(",") if c]   # conversation ids
 # TUNABLE($0.75 ceiling for one full run of the 8 conversations, ~24 turns; a run that would cross
 #   it stops and reports. Symptom wrong: a normal run aborts near the end -> re-quote.)
 SPEND_CEILING_USD = float(os.environ.get("EVAL_SPEND_CEILING", "0.75"))
@@ -320,7 +322,7 @@ def write_run(rows: list[dict], convs: list[dict], asker) -> str:
                   "keep_turns": agent.KEEP_TURNS, "cold_cache_s": agent.COLD_CACHE_S},
         "clock": {"start": START_CLOCK, "turn_gap_s": TURN_GAP_S},
         "asker_sha256_12": hashlib.sha256(asker.person_id.encode()).hexdigest()[:12],
-        "limit": LIMIT}, indent=1), encoding="utf-8")
+        "limit": LIMIT, "only": ONLY}, indent=1), encoding="utf-8")
     (out / "summary.json").write_text(json.dumps(summarize(rows), indent=1), encoding="utf-8")
     (out / "results.jsonl").write_text("\n".join(json.dumps(r, ensure_ascii=False) for r in rows)
                                        + "\n", encoding="utf-8")
@@ -330,6 +332,7 @@ def write_run(rows: list[dict], convs: list[dict], asker) -> str:
 def load_conversations() -> list[dict]:
     convs = [json.loads(line) for line in CONVERSATIONS.read_text(encoding="utf-8").splitlines()
              if line.strip()]
+    convs = [c for c in convs if c["id"] in ONLY] if ONLY else convs
     return convs[:LIMIT] if LIMIT else convs
 
 
