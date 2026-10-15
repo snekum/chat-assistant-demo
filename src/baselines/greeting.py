@@ -55,7 +55,7 @@ def build_session_brief(conn, sessions, asker: str, thread_id: str) -> dict:
     """Greeting preload (D-041), plain SQL, no model: the asker's executive-summary chunk
     (section 1 of their dossier, ~380 tokens) as CorpusEvidence, plus the latest find_members
     criterion of their most recent OTHER thread if it was touched inside the recall window --
-    the C7 callback topic, read from data already on disk, no summarising and no memory
+    the returning-member callback topic, read from data already on disk, no summarising and no memory
     layer. Only the most recent earlier thread is considered: "pick up where we left off"
     means the last conversation, not the most interesting one."""
     ts = _now()

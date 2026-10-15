@@ -1,17 +1,17 @@
 """Session store (D-036): threads and their artifacts, persisted.
 
-The census demands exactly two things from state:
+Multi-turn conversations need exactly two things from state:
   1. The THREAD -- every message including tool results, replayed to the model each turn.
      That is what makes "tell me more about the first person" work: the model reads the
      prior find_members result in the thread and resolves the ordinal itself. No framework
      machinery resolves referents; storage + replay is the harness's entire job here.
   2. ARTIFACTS -- ranked result sets a turn produced, kept addressable so later turns can
-     pass them back as tool operands (census C1/C8) and so a RETURNING session can recall
-     them (census C7: "bring them up again").
+     pass them back as tool operands ("who else among the people you suggested", re-ranking an
+     earlier list) and so a RETURNING session can recall them ("bring them up again").
 
-Cross-session scope, per the census finding: this store persists threads + artifacts and
+Cross-session scope: this store persists threads + artifacts and
 can list a user's prior threads. That is STATE persistence. The deferred thing stays
-deferred: no learned-preference extraction, no memory layer -- the memo §12 boundary is
+deferred: no learned-preference extraction, no memory layer -- that boundary is
 untouched. HOW a new session reaches into an old thread (auto-inject vs recall tool vs
 UI thread-resume) is a product decision still open; every option needs exactly this store.
 
@@ -104,7 +104,7 @@ class SessionStore:
             )
 
     def list_for(self, asker: str, limit: int = 10) -> list[dict]:
-        """Prior threads for a member, newest first -- the C7 recall surface. Returns
+        """Prior threads for a member, newest first -- the cross-session recall surface. Returns
         metadata only; the recall MECHANISM (auto-inject / tool / UI resume) is the
         product decision still open, and each option starts from this list."""
         with self.conn.cursor() as cur:

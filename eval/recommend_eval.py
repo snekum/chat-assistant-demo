@@ -16,7 +16,7 @@ Metrics, per question, then averaged:
 Questions dropped (D-050 follow-up, assistant rule): no member graded 2 (cannot test "found the
 best"), or more than half the network graded 2 (every method looks perfect).
 
-Usage:  python eval/recommend_eval.py <method>   (dense = today's search; see METHODS)
+Usage:  python eval/recommend_eval.py <method> [<method> ...]   (see METHODS)
         python eval/recommend_eval.py compare <run_a> <run_b> [metric]
 Writes runs/<ts>-<sha>-rec-<method>/ : config.json + summary.json (metrics only, committable) and
 results.jsonl (ranked person_ids per question -- gitignored by the runs/** rule).
@@ -126,12 +126,89 @@ def method_hybrid(conn, emb, agg: str = "max"):
     return lambda question: _rrf(dense(question), keyword(question))
 
 
+def method_rerank(conn, emb, model_name: str, agg: str, unit: str = "sections",
+                  live: bool = False):
+    """Cross-encoder re-orders hybrid_sum3's top rerank.POOL people (src/rerank.py); people past
+    the pool keep hybrid order, so recall@50 equals the pool's by construction. live=True: both
+    the pool and the reranker get the chat model's search phrase (as the product would), and the
+    fair baseline is then live_criterion, not hybrid_sum3."""
+    from importlib.metadata import version
+
+    import rerank
+    from tools import SCHEME
+    name, by_q = _splits() if live else (None, {})
+
+    def rank(question: str) -> list[str]:
+        text = by_q[question]["live"]["criterion"] if question in by_q else question
+        return rerank.rerank_people(conn, emb.embed_query(text), text, SCHEME,
+                                    model_name, agg, unit=unit)[0]
+    rank.stats = lambda: rerank.STATS
+    rank.config = {"rerank": {"model": rerank.MODELS[model_name], "agg": agg, "unit": unit,
+                              "pool": rerank.POOL, "per_person": rerank.PER_PERSON,
+                              "max_tokens": rerank.MAX_TOKENS[model_name],
+                              "device": rerank.device(), "dtype": rerank.dtype(model_name),
+                              "query": "live criterion" if live else "raw question",
+                              **({"needs_file": name} if live else {})},
+                   "rerank_stack": {p: version(p) for p in
+                                    ("sentence-transformers", "transformers", "torch")}}
+    return rank
+
+
+def _splits() -> tuple[str, dict[str, dict]]:
+    """The newest analysis/needs_haiku45_*.jsonl covering every scored question (eval/
+    split_needs.py): what the chat model would put in a find_members call, keyed by question."""
+    kept = {q["question"] for q in load_key()[1]}
+    for path in sorted((ROOT / "analysis").glob("needs_haiku45_*.jsonl"), reverse=True):
+        rows = [json.loads(l) for l in path.read_text(encoding="utf-8").splitlines() if l]
+        by_q = {r["question"]: r for r in rows if "live" in r and "split" in r}
+        if kept <= set(by_q):
+            return path.name, by_q
+    raise FileNotFoundError("no complete needs file -- run eval/split_needs.py submit/collect")
+
+
+def method_live_criterion(conn, emb):
+    """Diagnostic: hybrid on the search phrase the chat model writes for today's find_members,
+    instead of the raw question every other arm searches with."""
+    from tools import SCHEME
+    name, by_q = _splits()
+
+    def rank(question: str) -> list[str]:
+        text = by_q[question]["live"]["criterion"] if question in by_q else question
+        return rank_people(conn, emb.embed_query(text), text, SCHEME)[0]
+    rank.config = {"needs_file": name, "split_model": next(iter(by_q.values()))["model"]}
+    return rank
+
+
+def method_needs(conn, emb, mode: str):
+    """Arm 3 (src/needs.py): the chat model's split of the question into needs, exclusions and
+    the asker's context; per-need hybrid rankings combined by coverage."""
+    import needs
+    from tools import SCHEME
+    name, by_q = _splits()
+
+    def rank(question: str) -> list[str]:
+        s = by_q.get(question, {}).get("split", {})
+        return needs.rank_by_needs(conn, emb, question, s.get("needs", []),
+                                   s.get("exclude_topics", []), s.get("asker_context", ""),
+                                   SCHEME, mode)
+    rank.config = {"needs_file": name, "split_model": next(iter(by_q.values()))["model"],
+                   "needs": {"mode": mode, "context_weight": needs.CONTEXT_WEIGHT}}
+    return rank
+
+
 METHODS = {"dense": method_dense, "bm25": method_bm25,
+           "live_criterion": method_live_criterion,
+           **{f"needs_{m}": (lambda m: lambda c, e: method_needs(c, e, m))(m)
+              for m in ("rrf", "min", "rrf_ctx")},
            **{f"dense_{a}": (lambda a: lambda c, e: method_dense(c, e, a))(a)
               for a in ("sum2", "sum3", "mean3")},
            "hybrid": method_hybrid,
            **{f"hybrid_{a}": (lambda a: lambda c, e: method_hybrid(c, e, a))(a)
-              for a in ("sum2", "sum3", "mean3")}}
+              for a in ("sum2", "sum3", "mean3")},
+           **{f"ce_{m}_{a}": (lambda m, a: lambda c, e: method_rerank(c, e, m, a))(m, a)
+              for m in ("minilm", "bge") for a in ("max", "sum3")},
+           "ce_m3_profile": lambda c, e: method_rerank(c, e, "m3", "max", "profile"),
+           "ce_m3_profile_live": lambda c, e: method_rerank(c, e, "m3", "max", "profile", True)}
 
 
 def compare(run_a: str, run_b: str, metric: str = "ndcg@5") -> None:
@@ -140,13 +217,21 @@ def compare(run_a: str, run_b: str, metric: str = "ndcg@5") -> None:
     import random
     pa = json.loads((ROOT / "runs" / run_a / "summary.json").read_text())["per_question"]
     pb = json.loads((ROOT / "runs" / run_b / "summary.json").read_text())["per_question"]
-    diffs = [pb[q][metric] - pa[q][metric] for q in pa if q in pb]
+    author = {q["id"]: q.get("author") for q in
+              (json.loads(l) for l in QUESTIONS.read_text(encoding="utf-8").splitlines() if l)}
     rng = random.Random(0)
-    boots = sorted(sum(rng.choice(diffs) for _ in diffs) / len(diffs) for _ in range(10_000))
-    print(f"{run_b.split('-rec-')[-1]} vs {run_a.split('-rec-')[-1]} on {metric}: "
-          f"mean {sum(diffs) / len(diffs):+.3f} [95% CI {boots[250]:+.3f}, {boots[9750]:+.3f}] | "
-          f"wins {sum(d > 0.005 for d in diffs)}, losses {sum(d < -0.005 for d in diffs)}, "
-          f"ties {sum(abs(d) <= 0.005 for d in diffs)}")
+    print(f"{run_b.split('-rec-')[-1]} vs {run_a.split('-rec-')[-1]} on {metric}:")
+    # Real users' questions and assistant-drafted ones are reported apart: drafted questions
+    # skewed keyword-friendly once already, so they never decide a comparison alone.
+    for label, keep in (("all", lambda q: True), ("real", lambda q: author.get(q) != "assistant"),
+                        ("drafted", lambda q: author.get(q) == "assistant")):
+        diffs = [pb[q][metric] - pa[q][metric] for q in pa if q in pb and keep(q)]
+        if not diffs:
+            continue
+        boots = sorted(sum(rng.choice(diffs) for _ in diffs) / len(diffs) for _ in range(10_000))
+        print(f"  {label:8}(n={len(diffs):>2}) mean {sum(diffs) / len(diffs):+.3f} "
+              f"[95% CI {boots[250]:+.3f}, {boots[9750]:+.3f}] | wins {sum(d > 0.005 for d in diffs)}"
+              f", losses {sum(d < -0.005 for d in diffs)}, ties {sum(abs(d) <= 0.005 for d in diffs)}")
 
 
 def main(method: str) -> None:
@@ -157,13 +242,16 @@ def main(method: str) -> None:
     conn, emb = store.connect(), NomicLocal()
     rank = METHODS[method](conn, emb)
     rank("warm-up")                         # model + index load, kept out of the timing
-    per_q, results, elapsed = {}, [], 0.0
+    stats = getattr(rank, "stats", None)    # reranker arms: fresh vs memo-reused pairs
+    before = dict(stats()) if stats else None
+    per_q, results, times = {}, [], []
     for q in kept:
         t0 = time.perf_counter()
         ranked = rank(q["question"])
-        elapsed += time.perf_counter() - t0
+        times.append(time.perf_counter() - t0)
         per_q[q["id"]] = score(ranked, grades[q["id"]])
         results.append({"qid": q["id"], "ranked": ranked[:max(RECALL_KS)]})
+    pairs = ({k: stats()[k] - before[k] for k in before} if stats else {})
     metrics = list(next(iter(per_q.values())))
     overall = {m: round(sum(s[m] for s in per_q.values()) / len(per_q), 3) for m in metrics}
     by_tag = defaultdict(list)
@@ -173,23 +261,33 @@ def main(method: str) -> None:
 
     sha = subprocess.run(["git", "rev-parse", "--short", "HEAD"], capture_output=True, text=True,
                          cwd=ROOT).stdout.strip()
+    dirty = bool(subprocess.run(["git", "status", "--porcelain"],
+                                capture_output=True, text=True, cwd=ROOT).stdout.strip())
     run_id = f"{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}-{sha}-rec-{method}"
     out = ROOT / "runs" / run_id
     out.mkdir(parents=True)
     (out / "config.json").write_text(json.dumps({
         "run_id": run_id, "runner": "eval/recommend_eval.py", "method": method,
+        "git": {"sha": sha, "dirty": dirty},
         "answer_key": KEY.name, "rubric": "v3", "grader": "claude-haiku-5-5",
         "questions_kept": [q["id"] for q in kept], "shown": SHOWN, "gain": GAIN,
-        "max_share_of_2s": MAX_SHARE_OF_2S}, indent=1), encoding="utf-8")
+        "max_share_of_2s": MAX_SHARE_OF_2S, **getattr(rank, "config", {})},
+        indent=1), encoding="utf-8")
+    p95 = sorted(times)[math.ceil(0.95 * len(times)) - 1]
     (out / "summary.json").write_text(json.dumps({
         "n_questions": len(kept), "overall": overall,
-        "ms_per_question": round(1000 * elapsed / len(kept)),
+        "ms_per_question": round(1000 * sum(times) / len(kept)), "ms_p95": round(1000 * p95),
+        **({"rerank_pairs": pairs} if pairs else {}),
         "ndcg@5_by_tag": {t: round(sum(v) / len(v), 3) for t, v in sorted(by_tag.items())},
         "per_question": {q: {m: round(v, 3) for m, v in s.items()} for q, s in per_q.items()}},
         indent=1), encoding="utf-8")
     (out / "results.jsonl").write_text("\n".join(json.dumps(r) for r in results) + "\n",
                                        encoding="utf-8")
-    print(f"{run_id}: {len(kept)} questions, {1000 * elapsed / len(kept):.0f} ms per question")
+    print(f"{run_id}: {len(kept)} questions, {1000 * sum(times) / len(kept):.0f} ms per question "
+          f"(p95 {1000 * p95:.0f} ms)")
+    if pairs.get("reused"):
+        print(f"  NOTE: {pairs['reused']} of {pairs['reused'] + pairs['scored']} reranker pairs were "
+              "scored by an earlier arm in this process -- the time above excludes that scoring")
     for m, v in overall.items():
         print(f"  {m:10} {v:.3f}")
     print("  ndcg@5 by question type: " + ", ".join(
@@ -200,4 +298,5 @@ if __name__ == "__main__":
     if sys.argv[1] == "compare":
         compare(*sys.argv[2:])
     else:
-        main(sys.argv[1])
+        for m in sys.argv[1:]:          # several arms in one process share the reranker memo
+            main(m)

@@ -53,7 +53,7 @@ VIEWER_ENDPOINT = os.environ.get("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT", "http://l
 # --- Step vocabulary -----------------------------------------------------------------------
 
 # Span names are the workflow's steps. Kept as a named list because three consumers read them:
-# the trace file, the viewer, and the user-facing progress line (memo section 8 -- perceived
+# the trace file, the viewer, and the user-facing progress line (perceived
 # latency: the user sees "searching profiles..." while the work happens).
 STEP_PROGRESS: dict[str, str] = {
     "resolve": "looking up who you mean...",
@@ -63,7 +63,7 @@ STEP_PROGRESS: dict[str, str] = {
     "synthesize": "writing the answer...",
     # D-036 loop era: spans are named after the tool the coordinator called, plus the
     # model-decision round itself. Same three consumers as above; these ARE the streaming
-    # progress events the requirements memo section 8 asked for.
+    # progress events the perceived-latency requirement asked for.
     "coordinator_round": "thinking about what to do...",
     "find_members": "searching profiles...",
     "get_person_evidence": "reading dossiers...",
@@ -151,7 +151,7 @@ class JsonlSpanExporter(SpanExporter):
 
 class ProgressProcessor(SpanProcessor):
     """Fires a callback when a step STARTS, so the chat surface can show what is happening
-    while it happens (memo section 8, perceived latency). Only attributes passed at span
+    while it happens (perceived latency). Only attributes passed at span
     creation are visible here -- anything set later lands in the file, not the progress line."""
 
     def __init__(self, callback: Callable[[str, dict], None]):

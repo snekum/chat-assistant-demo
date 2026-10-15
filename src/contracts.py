@@ -13,10 +13,10 @@ over per-seam contracts):
 
 The evidence split is the load-bearing part. CorpusEvidence carries person_id; WebEvidence has
 no person_id field AT ALL -- not empty, absent. A web result therefore cannot be attributed to
-a member no matter what later code does (census open-call 2, the source-scoping invariant).
+a member no matter what later code does (the source-scoping invariant).
 Putting a Reuters claim in a real semi-public person's mouth is the exact reputational failure
 D-009 exists to prevent, and an absent field is the one thing a refactor cannot quietly undo.
-UserStatedEvidence (D-036 census C5) is the third kind: facts the asker supplied in
+UserStatedEvidence (D-036) is the third kind: facts the asker supplied in
 conversation ("we discussed collaborating on X"). Citable in drafts, never dossier-grade,
 never written back to any corpus -- and like web, it has no person_id to put words in a
 member's mouth.
@@ -51,7 +51,7 @@ HANDOFF_SCHEMA_VERSION = "v3"
 
 # Bump when an evidence kind gains/loses/renames a field, or a kind is added/removed.
 # Versioned SEPARATELY from the envelope so adding an envelope field does not invalidate
-# evidence-level comparability. v2 (2026-08-11, D-036): + UserStatedEvidence (census C5).
+# evidence-level comparability. v2 (2026-08-11, D-036): + UserStatedEvidence.
 EVIDENCE_SCHEMA_VERSION = "v2"
 
 # --- The three enums the eval scores -------------------------------------------------------
@@ -82,7 +82,7 @@ Scope = Literal["network", "open"]
 # Where evidence may come from. DERIVED from (flow, scope); never predicted.
 Lane = Literal["corpus", "web", "both", "neither"]
 
-# What the response does. Fixed by the requirements memo section 4.
+# What the response does. A product requirement.
 ResponseMode = Literal["answer", "refuse", "clarify", "redirect"]
 
 # Why a clarify is legal. Two kinds of "cannot answer yet", the product split (2026-10-12):
@@ -198,7 +198,7 @@ class CorpusEvidence:
 class WebEvidence:
     """One external search result. NO person_id field exists here, and none may be added --
     see the module docstring. Web claims are TOPIC claims; person claims come from dossiers
-    only (census open-call 2, confirmed)."""
+    only (the source-scoping invariant)."""
 
     url: str
     title: str
@@ -214,7 +214,7 @@ class WebEvidence:
 
 @dataclass(frozen=True)
 class UserStatedEvidence:
-    """A fact the ASKER supplied in conversation (D-036, census C5: "we talked about how we
+    """A fact the ASKER supplied in conversation (D-036: "we talked about how we
     can collaborate…"). Exists in no dossier and never will: citable in drafts and answers
     ("as you mentioned"), never dossier-grade, never written back to any corpus. Like
     WebEvidence it has NO person_id field -- a user's account of a meeting must not become a
@@ -238,8 +238,8 @@ EvidenceItem = CorpusEvidence | WebEvidence | UserStatedEvidence
 @dataclass(frozen=True)
 class ResultSetArtifact:
     """A ranked people-list a prior turn produced, persisted so later turns can operate ON it:
-    "who else amongst the people you suggested…" (census C1), counterfactual re-rank (C8),
-    "bring them up again" (C7 -- artifacts outlive the session; the session store persists
+    "who else amongst the people you suggested…", counterfactual re-rank under a changed criterion,
+    "bring them up again" (artifacts outlive the session; the session store persists
     them with the thread). person_ids are ORDERED as shown to the user, because ordinals
     ("the first person", "the 2nd one") resolve against display order and nothing else."""
 
@@ -509,13 +509,13 @@ if __name__ == "__main__":
     assert not answered_without_retrieval(bare)
     print("bypass predicate: fires on tool-less answers, exempts clarify/refuse/redirect")
 
-    # C5: user-stated facts are typed evidence with no person_id to misattribute.
+    # User-stated facts are typed evidence with no person_id to misattribute.
     stated = UserStatedEvidence(text="we discussed collaborating on semiconductors", turn=1,
                                 thread_id="t-1")
     assert "person_id" not in stated.to_dict()
     print("user_stated evidence carries provenance, no person_id")
 
-    # C1/C8: a prior turn's ranked list is a frozen artifact; ordinals resolve display order.
+    # Follow-ups on a list: a prior turn's ranked list is a frozen artifact; ordinals resolve display order.
     art = ResultSetArtifact(artifact_id="a1", criterion="pharmaceuticals",
                             person_ids=("p007", "p101", "p055"), turn=2, thread_id="t-1")
     assert art.person_ids[0] == "p007", "'the first person' is display order, nothing else"

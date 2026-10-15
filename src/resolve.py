@@ -35,7 +35,7 @@ from contracts import Resolution
 _WORD = re.compile(r"[A-Za-z][A-Za-z'\-]*")
 
 # Asker self-reference. Kept tiny and literal: these resolve to the authenticated member's own
-# person_id, which is what makes "what does my profile say?" answerable (memo section 6).
+# person_id, which is what makes "what does my profile say?" answerable (a product requirement).
 SELF_TERMS = frozenset({"me", "my", "mine", "myself", "i"})
 
 # Words that are capitalised for grammar, not because they are names. Only used to decide
@@ -186,7 +186,7 @@ class Resolver:
         # fitted to a single data point.
         #
         # Presentation of a large set is already governed: the top-5 cap plus honest-scope
-        # statement in the requirements memo.
+        # statement the product requires.
         for key in self._company_keys:
             single_word = len(key.split()) == 1
             for start, end in self._find_runs(lowered, key, consumed):

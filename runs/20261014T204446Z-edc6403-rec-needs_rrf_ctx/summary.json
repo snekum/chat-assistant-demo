@@ -1,0 +1,296 @@
+{
+ "n_questions": 34,
+ "overall": {
+  "ndcg@5": 0.496,
+  "useful@5": 0.659,
+  "best@5": 0.416,
+  "recall@10": 0.331,
+  "recall@20": 0.489,
+  "recall@50": 0.714
+ },
+ "ms_per_question": 316,
+ "ms_p95": 473,
+ "ndcg@5_by_tag": {
+  "contrast": 0.232,
+  "multi-need": 0.446,
+  "pick-n": 0.293,
+  "place-names": 0.531,
+  "rank": 0.779,
+  "set": 0.229,
+  "track-record": 0.658
+ },
+ "per_question": {
+  "rec-001": {
+   "ndcg@5": 0.516,
+   "useful@5": 0.8,
+   "best@5": 0.2,
+   "recall@10": 0.143,
+   "recall@20": 0.429,
+   "recall@50": 0.714
+  },
+  "rec-002": {
+   "ndcg@5": 0.686,
+   "useful@5": 1.0,
+   "best@5": 0.6,
+   "recall@10": 0.5,
+   "recall@20": 0.75,
+   "recall@50": 0.875
+  },
+  "rec-003": {
+   "ndcg@5": 1.0,
+   "useful@5": 1.0,
+   "best@5": 1.0,
+   "recall@10": 0.148,
+   "recall@20": 0.262,
+   "recall@50": 0.607
+  },
+  "rec-004": {
+   "ndcg@5": 0.387,
+   "useful@5": 0.8,
+   "best@5": 0.2,
+   "recall@10": 0.136,
+   "recall@20": 0.227,
+   "recall@50": 0.636
+  },
+  "rec-005": {
+   "ndcg@5": 0.217,
+   "useful@5": 0.4,
+   "best@5": 0.2,
+   "recall@10": 0.057,
+   "recall@20": 0.114,
+   "recall@50": 0.314
+  },
+  "rec-006": {
+   "ndcg@5": 0.339,
+   "useful@5": 0.2,
+   "best@5": 0.2,
+   "recall@10": 0.125,
+   "recall@20": 0.25,
+   "recall@50": 0.5
+  },
+  "rec-007": {
+   "ndcg@5": 1.0,
+   "useful@5": 1.0,
+   "best@5": 1.0,
+   "recall@10": 0.214,
+   "recall@20": 0.31,
+   "recall@50": 0.619
+  },
+  "rec-008": {
+   "ndcg@5": 0.61,
+   "useful@5": 0.6,
+   "best@5": 0.4,
+   "recall@10": 0.2,
+   "recall@20": 0.467,
+   "recall@50": 0.667
+  },
+  "rec-009": {
+   "ndcg@5": 0.643,
+   "useful@5": 0.8,
+   "best@5": 0.6,
+   "recall@10": 0.133,
+   "recall@20": 0.2,
+   "recall@50": 0.4
+  },
+  "rec-010": {
+   "ndcg@5": 0.044,
+   "useful@5": 0.2,
+   "best@5": 0.0,
+   "recall@10": 0.0,
+   "recall@20": 0.143,
+   "recall@50": 0.286
+  },
+  "rec-011": {
+   "ndcg@5": 0.277,
+   "useful@5": 0.8,
+   "best@5": 0.0,
+   "recall@10": 0.286,
+   "recall@20": 0.429,
+   "recall@50": 0.571
+  },
+  "rec-013": {
+   "ndcg@5": 0.733,
+   "useful@5": 0.8,
+   "best@5": 0.6,
+   "recall@10": 0.6,
+   "recall@20": 1.0,
+   "recall@50": 1.0
+  },
+  "rec-014": {
+   "ndcg@5": 0.241,
+   "useful@5": 0.6,
+   "best@5": 0.0,
+   "recall@10": 0.111,
+   "recall@20": 0.333,
+   "recall@50": 1.0
+  },
+  "rec-015": {
+   "ndcg@5": 0.437,
+   "useful@5": 0.4,
+   "best@5": 1.0,
+   "recall@10": 1.0,
+   "recall@20": 1.0,
+   "recall@50": 1.0
+  },
+  "rec-016": {
+   "ndcg@5": 0.463,
+   "useful@5": 0.4,
+   "best@5": 1.0,
+   "recall@10": 1.0,
+   "recall@20": 1.0,
+   "recall@50": 1.0
+  },
+  "rec-017": {
+   "ndcg@5": 0.913,
+   "useful@5": 1.0,
+   "best@5": 0.8,
+   "recall@10": 1.0,
+   "recall@20": 1.0,
+   "recall@50": 1.0
+  },
+  "rec-019": {
+   "ndcg@5": 0.33,
+   "useful@5": 0.6,
+   "best@5": 0.2,
+   "recall@10": 0.6,
+   "recall@20": 0.6,
+   "recall@50": 0.8
+  },
+  "rec-020": {
+   "ndcg@5": 0.264,
+   "useful@5": 0.4,
+   "best@5": 0.25,
+   "recall@10": 0.5,
+   "recall@20": 0.5,
+   "recall@50": 0.75
+  },
+  "rec-021": {
+   "ndcg@5": 0.402,
+   "useful@5": 0.6,
+   "best@5": 0.4,
+   "recall@10": 0.222,
+   "recall@20": 0.333,
+   "recall@50": 0.611
+  },
+  "rec-022": {
+   "ndcg@5": 0.113,
+   "useful@5": 0.2,
+   "best@5": 0.0,
+   "recall@10": 0.087,
+   "recall@20": 0.217,
+   "recall@50": 0.348
+  },
+  "rec-024": {
+   "ndcg@5": 0.214,
+   "useful@5": 0.2,
+   "best@5": 0.2,
+   "recall@10": 0.118,
+   "recall@20": 0.294,
+   "recall@50": 0.588
+  },
+  "rec-027": {
+   "ndcg@5": 0.303,
+   "useful@5": 0.8,
+   "best@5": 0.0,
+   "recall@10": 0.25,
+   "recall@20": 0.25,
+   "recall@50": 0.5
+  },
+  "rec-028": {
+   "ndcg@5": 1.0,
+   "useful@5": 1.0,
+   "best@5": 1.0,
+   "recall@10": 0.5,
+   "recall@20": 0.65,
+   "recall@50": 0.85
+  },
+  "rec-029": {
+   "ndcg@5": 0.668,
+   "useful@5": 0.6,
+   "best@5": 0.5,
+   "recall@10": 0.5,
+   "recall@20": 0.75,
+   "recall@50": 1.0
+  },
+  "rec-030": {
+   "ndcg@5": 1.0,
+   "useful@5": 1.0,
+   "best@5": 1.0,
+   "recall@10": 0.108,
+   "recall@20": 0.176,
+   "recall@50": 0.392
+  },
+  "rec-031": {
+   "ndcg@5": 0.458,
+   "useful@5": 0.6,
+   "best@5": 0.4,
+   "recall@10": 0.231,
+   "recall@20": 0.385,
+   "recall@50": 0.846
+  },
+  "rec-032": {
+   "ndcg@5": 1.0,
+   "useful@5": 1.0,
+   "best@5": 1.0,
+   "recall@10": 0.75,
+   "recall@20": 1.0,
+   "recall@50": 1.0
+  },
+  "rec-034": {
+   "ndcg@5": 0.475,
+   "useful@5": 1.0,
+   "best@5": 0.0,
+   "recall@10": 0.0,
+   "recall@20": 0.5,
+   "recall@50": 1.0
+  },
+  "rec-035": {
+   "ndcg@5": 0.255,
+   "useful@5": 0.6,
+   "best@5": 0.0,
+   "recall@10": 0.0,
+   "recall@20": 0.25,
+   "recall@50": 0.75
+  },
+  "rec-036": {
+   "ndcg@5": 0.432,
+   "useful@5": 0.6,
+   "best@5": 0.4,
+   "recall@10": 0.5,
+   "recall@20": 0.6,
+   "recall@50": 0.9
+  },
+  "rec-037": {
+   "ndcg@5": 0.205,
+   "useful@5": 0.6,
+   "best@5": 0.0,
+   "recall@10": 0.286,
+   "recall@20": 0.571,
+   "recall@50": 0.714
+  },
+  "rec-038": {
+   "ndcg@5": 0.913,
+   "useful@5": 1.0,
+   "best@5": 0.8,
+   "recall@10": 0.75,
+   "recall@20": 1.0,
+   "recall@50": 1.0
+  },
+  "rec-039": {
+   "ndcg@5": 0.333,
+   "useful@5": 0.8,
+   "best@5": 0.2,
+   "recall@10": 0.2,
+   "recall@20": 0.5,
+   "recall@50": 0.8
+  },
+  "rec-040": {
+   "ndcg@5": 0.0,
+   "useful@5": 0.0,
+   "best@5": 0.0,
+   "recall@10": 0.0,
+   "recall@20": 0.125,
+   "recall@50": 0.25
+  }
+ }
+}

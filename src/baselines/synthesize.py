@@ -45,7 +45,7 @@ CORE_FILE = PROMPT_DIR / "core-v1.md"
 
 # The exact sentence that marks a WHOLE-ANSWER refusal -- both evidence kinds came back
 # unsupportive. D-019 re-anchor (G-003): f6-v1's string named "the provided reports", which the
-# coordinator voice forbids (memo section 5b), so the string changes and the deterministic
+# assistant's voice forbids (it never mentions reports), so the string changes and the deterministic
 # detector re-points at this constant. Per-source silence emits NO string and is measured a
 # different way (retrieved-but-uncited evidence, D-029(c) consequence 3) -- so the presence of
 # this sentence still means exactly one thing, which is what keeps refusal_exact deterministic.
@@ -63,7 +63,7 @@ from contracts import REFUSAL_STRING  # noqa: E402  (shared; defined once)
 # Phase-4 gate see it -- and ONLY the display layer drops it.
 SELF_CITATION_MARKER = "[self]"
 
-# User-stated facts (contracts.UserStatedEvidence, census C5) get the SAME treatment for the
+# User-stated facts (contracts.UserStatedEvidence) get the SAME treatment for the
 # SAME reason, so this is D-032's decided principle applied rather than a new call: an omitted
 # citation would make the stated fact look retrieved-but-uncited, which is the residue signal
 # meaning "synthesis dropped good evidence". A marker keeps every claim traceable internally

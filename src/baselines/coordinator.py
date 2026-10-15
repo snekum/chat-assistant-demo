@@ -69,7 +69,7 @@ COORD_CONTRACT_VERSION = "coord-v1"
 PROMPT_DIR = Path(__file__).resolve().parents[2] / "prompts" / "coordinator"
 CORE_FILE = PROMPT_DIR / "core-v1.md"
 
-# TUNABLE(5 rounds per turn: the census's worst within-turn trajectory is 2-3 tool rounds
+# TUNABLE(5 rounds per turn: the worst observed within-turn trajectory is 2-3 tool rounds
 #         plus respond; 5 = that plus headroom. Symptom wrong: budget-abort spans on real
 #         questions in traces -> raise; p95 rounds should sit near 2.)
 MAX_ROUNDS = 5
@@ -186,7 +186,7 @@ class Coordinator:
 
         messages = list(thread.messages)
         messages.append({"role": "user", "content": user_text})
-        # C5: the asker's own words, typed as evidence so the judge sees what the writer sees.
+        # The asker's own words, typed as evidence so the judge sees what the writer sees.
         env.evidence.append(UserStatedEvidence(text=user_text, turn=len(thread.messages),
                                                thread_id=thread.thread_id))
         seen_calls: set[str] = set()
@@ -594,7 +594,7 @@ if __name__ == "__main__":
     assert w.seen_tools is not None, "tool menu must ride along for the wire format"
     print(f"2. writer saw {len(w.seen_messages)} messages + the tool menu")
 
-    # 3 -- C5: the asker's own words are on the envelope as typed evidence, no person_id.
+    # 3 -- the asker's own words are on the envelope as typed evidence, no person_id.
     stated = [e for e in env.evidence if isinstance(e, USE)]
     assert len(stated) == 1 and stated[0].text == "Anyone in pharma I can talk to?"
     assert "person_id" not in stated[0].to_dict()

@@ -2,7 +2,7 @@
 Haiku coordinator, real harness law, and (Step 5) the real pinned synth-v1 answer call.
 
 Usage:  python scripts/chat_smoke.py "Is there anyone in fintech I could talk to?"
-        python scripts/chat_smoke.py            (runs the default three-turn census-C1 shape)
+        python scripts/chat_smoke.py            (runs the default three-turn list-then-follow-up shape)
 
 Needs Postgres up (docker compose up -d) and ANTHROPIC_API_KEY in .env.
 
@@ -68,8 +68,8 @@ def main() -> None:
         cur.execute("SELECT person_id FROM persons ORDER BY person_id LIMIT 1")
         asker = cur.fetchone()[0]
 
-    # The pinned answer path: streams deltas straight to stdout so perceived latency (memo
-    # section 8) is something you can watch rather than something we assert.
+    # The pinned answer path: streams deltas straight to stdout so perceived latency (a product
+    # requirement) is something you can watch rather than something we assert.
     write_answer = make_answer_writer(
         provider, resolver.name_of, on_delta=lambda d: print(d, end="", flush=True)
     )

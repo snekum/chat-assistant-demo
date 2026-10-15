@@ -1,10 +1,10 @@
 """Typed tools for the coordinator loop (D-036): the deterministic layer the model drives.
 
-The census verdict this module implements: the atomic OPERATIONS are few and known; the
+The design this module implements (D-036): the atomic OPERATIONS are few and known; the
 SEQUENCE and the OPERAND are chosen by the conversation. So each tool here is deterministic,
 evidence-only (D-029: chunks + citations, no prose -- exactly ONE generation in the system,
-at the coordinator), and takes session artifacts as operands where the census demands it
-(within_person_ids for "who else amongst the people you suggested…", census C1/C8).
+at the coordinator), and takes session artifacts as operands where the conversation needs it
+(within_person_ids for "who else amongst the people you suggested…").
 
 NOMINATE-VS-APPOINT AT THE TOOL LAYER (D-028, promoted by D-036): the model nominates person
 references -- names as the user typed them, or person_ids it has seen in this conversation --
@@ -18,7 +18,7 @@ on bad model input -- a raised exception would be retried by the harness, and a 
 the resolver rejects is not a transport failure.
 
 OWED, deliberately not built here: asker-personalised ranking for find_members (Step 6, behind
-the memo §11 facet fork -- an open product decision) and §12 confidence grades on evidence (synthesis
+an open product decision on facets) and confidence grades on evidence (synthesis
 wiring). find_members ranks by evidence strength alone until that fork is decided.
 """
 from __future__ import annotations
@@ -55,11 +55,11 @@ K_PER_PERSON = 5
 #         wrong: a member the offline sweep-gold marks strong never enters the pool -> raise)
 SWEEP_K = 30
 
-# TUNABLE(top-5 members returned, the memo §2 product cap; symptom wrong: users routinely ask
+# TUNABLE(top-5 members returned, the product's cap; symptom wrong: users routinely ask
 #         for more -> raise the cap, or ranking buries the right people -> fix ranking not cap)
 TOP_N_MEMBERS = 5
 
-# TUNABLE(<=3 supporting chunks per member in aggregates, memo §2 "no dossier hogging"; symptom
+# TUNABLE(<=3 supporting chunks per member in aggregates, product rule "no dossier hogging"; symptom
 #         wrong: "why them" lines unsupported by the shown snippets -> raise)
 SNIPPETS_PER_MEMBER = 3
 
@@ -102,7 +102,7 @@ def build_resolver(conn) -> Resolver:
 
 class Toolbox:
     """One per request: binds the shared embedder/connection/resolver to the ASKER, so
-    self-exclusion (census C1 "anyone else") is structural rather than a prompt hope."""
+    self-exclusion ("anyone else") is structural rather than a prompt hope."""
 
     # The loop reads the menu off the toolbox instance (test doubles carry their own).
     @property
@@ -144,7 +144,7 @@ class Toolbox:
             appointed = list(res.person_ids)
             # Self-reference is not a resolution (the asker is authenticated, resolve.py takes
             # no asker) -- it is appointed HERE, which is what makes "do we have anything in
-            # common?" = person_refs ["me", "Ana"] work (census C3).
+            # common?" = person_refs ["me", "Ana"] work.
             if res.self_reference and self.asker not in appointed:
                 appointed.append(self.asker)
             if appointed:
@@ -176,7 +176,7 @@ class Toolbox:
         """Evidence about specific people. 1 person = lookup/fact; 2+ = comparison (the boundary
         is the argument count, not a flow). person-scoped pre-filter per person (D-016 made
         load-bearing -- the wrong-Ross class is structurally impossible once the id is right).
-        full_dossier=True fetches the whole dossier per person (brief flow, census C3; retrieval
+        full_dossier=True fetches the whole dossier per person (brief flow; retrieval
         is by-person, not by-similarity, so no query embedding runs). Include the asker's own id
         to join their profile against a target ("do we have anything in common?" = [asker, X])."""
         ids, err = self._appoint(person_refs)
@@ -216,8 +216,8 @@ class Toolbox:
                      within_person_ids: list[str] | None = None) -> dict:
         """Discover members by criterion (aggregate flow). Wide sweep -> group by person ->
         rank by evidence strength -> top members with supporting snippets. The ASKER is always
-        excluded (memo §6 self-exclusion). within_person_ids re-queries INSIDE a prior result
-        set (census C1/C8: "who else amongst the people you suggested…") -- pass the ids from
+        excluded (members never appear in their own results). within_person_ids re-queries INSIDE a prior result
+        set ("who else amongst the people you suggested…") -- pass the ids from
         the earlier result, and each is searched person-scoped so nobody drops out merely by
         losing a global ranking race. No relevance cutoff yet: the cutoff is G-004 instrument
         design (Step 6, open design fork); until then weak tail members are visible, not hidden."""

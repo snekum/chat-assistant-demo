@@ -95,6 +95,10 @@ def rank_people(conn, qvec, query: str, scheme: str,
                 top: int = 5, per_person: int = 3) -> tuple[list[str], dict[str, list[dict]]]:
     """-> (every kept person, best first; the `top` people's sections, best first, `per_person`
     each). Section rows are store.search rows (score = meaning similarity)."""
+    # TUNABLE(rank EVERY section with both searches, every query: exact, ~80 ms at 4,006 sections.
+    #   Cost grows with the network -- every row and its text leaves Postgres, BM25 loops over all.
+    #   Symptom wrong: member search past ~300 ms, or sections past ~40k -> each search returns
+    #   only its top few hundred (HNSW index + an inverted keyword index) and fusion runs on those.)
     dense_rows = store.search(conn, qvec, k=100_000, scheme=scheme)     # every section, best-first
     by_person: dict[str, list[dict]] = defaultdict(list)
     for r in dense_rows:

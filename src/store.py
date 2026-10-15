@@ -119,7 +119,7 @@ def search(conn: psycopg.Connection, qvec: np.ndarray, k: int = 3,
 def fetch_person_chunks(conn: psycopg.Connection, person_id: str,
                         scheme: str = "whole_doc") -> list[dict[str, Any]]:
     """Every chunk of ONE person in a scheme, in document order -- no similarity involved.
-    Serves the brief flow (census C3): a meeting-prep summary wants the dossier, not the k
+    Serves the brief flow: a meeting-prep summary wants the dossier, not the k
     chunks nearest some query. whole_doc scheme = one row = the whole dossier (D-023 retained
     it for exactly this)."""
     sql = """
