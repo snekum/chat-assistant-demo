@@ -1,0 +1,92 @@
+{
+ "n_conversations": 5,
+ "n_turns": 14,
+ "checks": {
+  "pass": 6,
+  "fail": 3,
+  "setup_failed": 0
+ },
+ "by_kind": {
+  "intro": {
+   "pass": 4,
+   "fail": 3,
+   "setup_failed": 0
+  },
+  "asks": {
+   "pass": 1,
+   "fail": 0,
+   "setup_failed": 0
+  },
+  "lookup": {
+   "pass": 1,
+   "fail": 0,
+   "setup_failed": 0
+  }
+ },
+ "errors": 0,
+ "first_words_s": {
+  "tool_turns_p50": 2.18,
+  "tool_turns_p95": 4.6,
+  "no_tool_turns_p50": null,
+  "n_tool_turns": 14,
+  "turns_showing_pre_tool_text": 4
+ },
+ "turn_s_p50": 4.85,
+ "cost_usd": 0.1232,
+ "per_check": {
+  "cv-009.t2": {
+   "kind": "intro",
+   "pattern": "intro: draft and approve as written",
+   "result": "fail",
+   "detail": "no approval requested (no send_intro call)"
+  },
+  "cv-010.t2": {
+   "kind": "intro",
+   "pattern": "intro: member edits before sending",
+   "result": "pass",
+   "detail": "draft to L1.1 (62 words), edit -> 1 sent"
+  },
+  "cv-011.t2": {
+   "kind": "intro",
+   "pattern": "intro: member asks for changes, then approves the redraft",
+   "result": "fail",
+   "detail": "no approval requested (no send_intro call)"
+  },
+  "cv-011.t3": {
+   "kind": "intro",
+   "pattern": "intro: member asks for changes, then approves the redraft",
+   "result": "fail",
+   "detail": "draft to L1.3 (38 words), approve -> 1 sent; not shorter than the previous draft"
+  },
+  "cv-012.t2": {
+   "kind": "asks",
+   "pattern": "intro: no reason given -> asks; then declines, then picks someone else",
+   "result": "pass",
+   "detail": "asked"
+  },
+  "cv-012.t3": {
+   "kind": "intro",
+   "pattern": "intro: no reason given -> asks; then declines, then picks someone else",
+   "result": "pass",
+   "detail": "draft to L1.1 (86 words), reject -> 0 sent"
+  },
+  "cv-012.t4": {
+   "kind": "intro",
+   "pattern": "intro: no reason given -> asks; then declines, then picks someone else",
+   "result": "pass",
+   "detail": "draft to L1.2 (88 words), approve -> 1 sent"
+  },
+  "cv-013.t2": {
+   "kind": "lookup",
+   "pattern": "intro: message the person just discussed",
+   "result": "pass",
+   "detail": "fetched ['L1.2'] wanted ['L1.2']"
+  },
+  "cv-013.t3": {
+   "kind": "intro",
+   "pattern": "intro: message the person just discussed",
+   "result": "pass",
+   "detail": "draft to L1.2 (90 words), approve -> 1 sent"
+  }
+ }
+}

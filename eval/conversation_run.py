@@ -23,6 +23,7 @@ Checks (on the turn that carries "expect"):
               the outbox must hold exactly what was approved (the edited text for an edit,
               nothing for a reject). "shorter": the redraft after "make it shorter" is shorter.
               A message typed while a draft waits declines it with those words, as in the app.
+  asks        the member asked for a message without saying why: no draft, a question back.
 A reference beyond a list's length (the agent showed 3, the member asks for the fourth) scores
 setup_failed -- the conversation could not be set up, so it is neither a pass nor a fail.
 
@@ -205,6 +206,13 @@ def check(expect: dict, lists: dict, ev: dict, named: list[str], intro: dict | N
     kind = expect["kind"]
     if kind == "intro":
         return check_intro(expect, lists, ev, intro or {})
+    if kind == "asks":
+        drafted = (intro or {}).get("approval") is not None or any(
+            c["name"] == "send_intro" for c in ev["tool_calls"])
+        ok = not drafted and "?" in ev["reply"]
+        return {"result": "pass" if ok else "fail",
+                "detail": "drafted a message" if drafted else
+                          ("asked" if ok else "no draft, but no question either")}
     asked = not ev["tool_calls"] and "?" in ev["reply"]
     if kind in ("lookup", "lookup_set"):
         refs = [expect["target"]] if kind == "lookup" else expect["targets"]
@@ -482,17 +490,40 @@ def play_scripted(conn, resolver, emb, asker, convs, wrong: bool = False, pad_wo
                                                   "args": {"recipient": name[pid],
                                                            "message": text}}])
 
+    def recipient(exp, lists):
+        pid = resolve_ref(exp["target"], lists)
+        if wrong:
+            people = lists[exp["target"].split(".")[0]]
+            pid = people[(people.index(pid) + 1) % len(people)]
+        return pid
+
+    def looked_up(messages, pid) -> bool:
+        return any(isinstance(m, ToolMessage) and m.name == "get_person_evidence"
+                   and pid in agent._text(m) for m in messages)
+
     def act(messages) -> AIMessage:
         spec, lists, conv = ctx["spec"], ctx["lists"], ctx["conv"]
         ctx["calls"].append((conv["id"], ctx["turn"], list(messages)))
         last, exp = messages[-1], spec.get("expect") or {}
+        drafting = exp.get("kind") == "intro" or (exp.get("kind") == "asks" and wrong)
         if isinstance(last, ToolMessage) and last.name == "send_intro":
             said = agent._text(last)
             if "did not send it and said" in said and exp.get("kind") == "intro":
                 return intro_call(exp, lists, short=True)       # "make it shorter" -> redraft
             return AIMessage(content="Done, it's sent." if '"ok": true' in said
                              else "Okay, I won't send it.")
-        if isinstance(last, HumanMessage) and exp.get("kind") == "intro":
+        if exp.get("kind") == "asks" and not wrong and isinstance(last, HumanMessage):
+            return AIMessage(content="Happy to. What would you like to talk to them about?")
+        if drafting and isinstance(last, (HumanMessage, ToolMessage)) and not any(
+                isinstance(m, AIMessage) and any(c["name"] == "send_intro" for c in m.tool_calls)
+                for m in messages[messages.index(next(m for m in reversed(messages)
+                                                      if isinstance(m, HumanMessage))):]):
+            pid = recipient(exp, lists)
+            if not looked_up(messages, pid):      # D-056: look the recipient up first
+                ctx["n"] += 1
+                return AIMessage(content="", tool_calls=[{
+                    "name": "get_person_evidence", "id": f"c{ctx['n']}",
+                    "args": {"query": "what they could share", "person_refs": [pid]}}])
             return intro_call(exp, lists, short=False)
         if isinstance(messages[-1], ToolMessage):        # write the reply from this turn's results
             shown = []

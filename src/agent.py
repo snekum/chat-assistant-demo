@@ -311,6 +311,15 @@ def intro_problem(resolver, args: dict, messages, asker_id: str,
     if not seen(rid):
         return ("That person has not come up in this conversation; find them first so the "
                 "message rests on their dossier."), None
+    # D-056: a message in the member's name rests on the recipient's dossier, not on a list's
+    # snippets. The prompt asks for the lookup; the model skipped it on 3 of 5 drafts, so it is
+    # checked here. The saved thread counts, even where a pause dropped it from the model's view.
+    looked_up = any(isinstance(m, ToolMessage) and m.name == "get_person_evidence"
+                    and rid in _text(m) and '"ok": true' in _text(m) for m in messages)
+    if not looked_up:
+        return (f"Look {resolver.name_of[rid]} up with get_person_evidence first (a query about "
+                "why they matter to what the member wants), then write the message from their "
+                "dossier."), None
     if not text:
         return "The message is empty.", None
     if len(text) > MAX_INTRO_CHARS:
@@ -1097,6 +1106,12 @@ if __name__ == "__main__":
         return AIMessage(content="", tool_calls=[{"name": "send_intro", "id": call_id,
                                                   "args": {"recipient": to, "message": text}}])
 
+    # D-056: a message needs the recipient looked up first; the target is, found[2] is not.
+    ask(intro_agent([AIMessage(content="", tool_calls=[{
+        "name": "get_person_evidence", "id": "l1", "args": {
+            "query": "their payments experience", "person_refs": [tname]}}]),
+        AIMessage(content="Here is more about them.")]), "Tell me more about the second one")
+
     agent = intro_agent([send(draft, "s1"), AIMessage(content="Sent.")])
     ask(agent, "Message the second one for me")
     waiting = pending_approval(agent, resolver, "intro", asker)
@@ -1125,14 +1140,15 @@ if __name__ == "__main__":
     stranger = next(p for p in reversed(ids) if p != me and p not in {m["person_id"] for m in found}
                     and len(resolver.name_of[p].split()) == 2)
     for bad in (send("Hi, quick hello from me.", "g1", to=resolver.name_of[stranger]),
-                send(f"Hi, {found[0]['name']} suggested I write.", "g2")):
+                send(f"Hi, {found[0]['name']} suggested I write.", "g2"),
+                send("Hi, quick hello from me.", "g3", to=found[2]["name"])):
         agent = intro_agent([bad, AIMessage(content="I could not send that.")])
         msgs = ask(agent, "Message them")
         out = json.loads(next(_text(m) for m in reversed(msgs) if isinstance(m, ToolMessage)))
         assert out["error"] == "not_sent" and pending_approval(agent, resolver, "intro", asker) \
             is None and len(sent_box.sent) == 2, out
-    print("19. a message to someone the conversation never surfaced, or naming another member, "
-          "never reaches the approval card and is not sent")
+    print("19. a message to someone the conversation never surfaced, to someone not looked up "
+          "yet, or naming another member, never reaches the approval card and is not sent")
 
     agent = intro_agent([send(draft, "s4"), AIMessage(content="Sent.")])
     events = list(stream_turn(agent, resolver, "intro", asker, "Write to them again"))
