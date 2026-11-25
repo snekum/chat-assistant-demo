@@ -94,6 +94,7 @@ class Asker:
     person_id: str
     name: str
     profile_summary: str  # executive-summary chunk of their own dossier, loaded by SQL
+    industry: str = ""    # their dossier's "Industry:" line (D-064 anchors member searches on it)
 
 
 def _text(msg) -> str:
@@ -364,6 +365,18 @@ def _since_member(messages) -> list:
 # news half of an answer written before the members search always did. Known cost: an uncited
 # real sentence written in a tool round is dropped -- the eval rows list dropped text to read.
 _SOURCE_TAG = re.compile(r"\[(?:web:|self\]|stated\]|profile:)", re.IGNORECASE)
+# TUNABLE(the "we don't advise" sentence is kept too, cited or not. Live case 2026-11-25: asked
+#   "should I raise my prices?", the model wrote the decline alongside its members search; it had
+#   no tag, so it was dropped and the member saw only names, no refusal. Symptom wrong: a reply
+#   shows members with no decline after a "should I" question -> widen; narration kept because it
+#   says "advise" -> narrow.)
+DECLINE = re.compile(r"\b(?:don['’]?t|do not|doesn['’]?t|can['’]?t|cannot|won['’]?t)\s+"
+                     r"(?:give\s+|offer\s+|provide\s+)?(?:business\s+)?advi[cs]e", re.IGNORECASE)
+
+
+def keeps(text: str) -> bool:
+    """D-061: does text written alongside a tool call belong in the reply?"""
+    return bool(_SOURCE_TAG.search(text) or DECLINE.search(text))
 # The members check's own entry in the thread (a tool call it adds, never a real search).
 GUARD_ID = "guard-members-"
 # TUNABLE(a member asking about themselves: "my business", "affect us", "matters to me". D-059's
@@ -375,9 +388,49 @@ MEMBERS_MISSING = (
     "Your text above is already shown to the member as the start of your answer. They asked how "
     "the news meets their business, so the answer must also name members of the network who work "
     "in the affected area or have dealt with it. These members were found for what you searched "
-    "the web for. Now write ONLY the members part, to follow your text: the two or three who fit "
-    "best, a line or two each, from their passages. Don't repeat anything above and don't search "
-    "again.")
+    "the web for. Now write ONLY the members part, to follow your text: the three who fit best, a "
+    "line or two each, from their passages; if fewer than three clearly fit, name only those and "
+    "say in one short sentence that few members work on this. Don't repeat anything above and "
+    "don't search again.")
+# D-064: on a news or "should I" turn the members search is anchored on the asker's industry and
+# returns a wider pool, which the model trims to the three who fit best (never padded).
+MEMBERS_PICK = (
+    "This is a wider list than usual, searched with the member's own industry in mind. Name the "
+    "three who fit best for this member, a line or two each saying why, from their passages. If "
+    "fewer than three clearly fit, name only those and say in one short sentence that few members "
+    "work on this; never add a weak fit to reach three.")
+# TUNABLE(10 candidates for the model to trim to 3: the live case had 1 clear fit in 5. Symptom
+#   wrong: answers still say "few members" while good people exist further down -> widen; first
+#   words or turn time grow from the longer tool result -> narrow.)
+MEMBER_POOL = 10
+# TUNABLE(2 passages per candidate in the wider pool, not the usual 3: 10 x 3 doubled the tokens
+#   the model reads on these turns (quote $0.16 -> $0.29); 10 x 2 is ~+1/3. Symptom wrong: "why
+#   them" lines say things the shown passages don't support, or good fits passed over for thin
+#   evidence -> 3.)
+POOL_PASSAGES = 2
+# TUNABLE("should I/we", "what should I do": a member asking for a decision. Such turns get the
+#   anchored, wider members search like news turns. Symptom wrong: a "should I" turn names members
+#   from unrelated industries -> widen; an unrelated search ("should I meet X?") gets anchored ->
+#   narrow.)
+ADVICE = re.compile(r"\bshould (?:i|we)\b|\bwhat (?:should|would|do) (?:i|we)\b", re.IGNORECASE)
+
+
+def anchored_turn(messages) -> bool:
+    """D-064: is this a turn about the member's own business that needs members to fit THEM --
+    a news question (the turn searched the web) or a decision question ("should I ...?")."""
+    user = next((_text(m) for m in reversed(messages) if isinstance(m, HumanMessage)), "")
+    if not ABOUT_ME.search(user):
+        return False
+    web = any(c["name"] == "web_search" for m in _since_member(messages)
+              if isinstance(m, AIMessage) for c in m.tool_calls or [])
+    return web or bool(ADVICE.search(user))
+
+
+def anchored(criterion: str, industry: str) -> str:
+    """The members criterion with the asker's industry in front (once)."""
+    if not industry or industry.lower() in criterion.lower():
+        return criterion
+    return f"{industry}; {criterion}"
 MEMBERS_UNAVAILABLE = ("The members search could not run. Add one sentence saying you could not "
                        "search the network just now. Don't repeat anything above.")
 # TUNABLE(news-query filler stripped before a members search on the turn's web queries: words
@@ -414,7 +467,7 @@ def kept_tool_round_text(messages) -> list[str]:
         if not (isinstance(m, AIMessage) and m.tool_calls and _text(m).strip()):
             continue
         guarded = any(c["id"].startswith(GUARD_ID) for c in m.tool_calls)
-        if guarded or _SOURCE_TAG.search(_text(m)):
+        if guarded or keeps(_text(m)):
             out.append(_text(m).strip())
     return out
 
@@ -514,6 +567,13 @@ def build_agent(emb, conn, resolver, checkpointer, model=None, web_enabled=WEB_S
             return err
         box = Toolbox(emb, conn, resolver, asker=runtime.context.person_id,
                       model_picks=model_picks)
+        if within_person_ids is None and anchored_turn(runtime.state["messages"]):
+            searched = anchored(criterion, runtime.context.industry)
+            found = json.loads(_model_view(box.find_members(
+                searched, exclude_person_ids, top=MEMBER_POOL, per_member=POOL_PASSAGES)))
+            if found.get("ok"):
+                found.update(searched_for=searched, instruction=MEMBERS_PICK)
+            return _dump(found)
         return _model_view(box.find_members(criterion, exclude_person_ids, within_person_ids))
 
     @tool
@@ -675,10 +735,11 @@ def build_agent(emb, conn, resolver, checkpointer, model=None, web_enabled=WEB_S
             # searched the web for, so the model needs one more call (write the members part),
             # not two (start a search, then write) -- ~4-5 s off a turn that is already long.
             call_id = f"{GUARD_ID}{last.id}"
-            criterion = members_criterion(state["messages"])
+            criterion = anchored(members_criterion(state["messages"]), runtime.context.industry)
             box = Toolbox(emb, conn, resolver, asker=runtime.context.person_id,
                           model_picks=model_picks)
-            found = json.loads(_model_view(box.find_members(criterion)))
+            found = json.loads(_model_view(box.find_members(criterion, top=MEMBER_POOL,
+                                                            per_member=POOL_PASSAGES)))
             found["instruction"] = MEMBERS_MISSING if found.get("ok") else MEMBERS_UNAVAILABLE
             log.info("members check: news answer had no members search; searched for it")
             return {"messages": [
@@ -726,10 +787,29 @@ def open_checkpointer() -> PostgresSaver:
     return saver
 
 
+# TUNABLE(80 characters of the dossier's "Industry:" line, the bracketed detail dropped: enough to
+#   name the field ("Financial Services / Banking Technology"), short enough not to outweigh the
+#   topic in the members search. 260 of 268 dossiers have the line; the rest get no anchor.
+#   Symptom wrong: anchored searches return the asker's industry but nothing about the topic ->
+#   shorten; the industry word lost to the cut -> lengthen.)
+INDUSTRY_CHARS = 80
+_INDUSTRY_LINE = re.compile(r"^[ \t]*(?:[*-][ \t]+)?\*\*Industry:?\*\*:?[ \t]*([^\n]+)",
+                            re.IGNORECASE | re.MULTILINE)
+
+
+def industry_of(chunks: list[dict]) -> str:
+    """The first "Industry:" line in a dossier, without its bracketed detail; "" when absent."""
+    for row in chunks:
+        if m := _INDUSTRY_LINE.search(row["text"]):
+            text = re.sub(r"\s*(?:\([^)]*\)?|\[cite:[^\]]*\]?)", "", m.group(1)).strip(" .*")
+            return text[:INDUSTRY_CHARS].rsplit(" ", 1)[0] if len(text) > INDUSTRY_CHARS else text
+    return ""
+
+
 def load_asker(conn, resolver, person_id: str) -> Asker:
-    rows = store.fetch_person_chunks(conn, person_id, scheme=SCHEME)[:1]
+    rows = store.fetch_person_chunks(conn, person_id, scheme=SCHEME)
     return Asker(person_id=person_id, name=resolver.name_of.get(person_id, ""),
-                 profile_summary=rows[0]["text"] if rows else "")
+                 profile_summary=rows[0]["text"] if rows else "", industry=industry_of(rows))
 
 
 class ChatService:
@@ -929,7 +1009,7 @@ def _stream(agent, resolver, thread_id: str, asker: Asker, payload, new_msgs: li
                         # members check sent back) stays on screen, the status line under it.
                         text = _text(m).strip()
                         if text and (any(c["id"].startswith(GUARD_ID) for c in m.tool_calls)
-                                     or _SOURCE_TAG.search(text)) \
+                                     or keeps(text)) \
                                 and not set(resolver.full_names(text)) - allowed:
                             kept.append(text)
                             yield "kept", "\n\n".join(kept)
@@ -1474,8 +1554,21 @@ if __name__ == "__main__":
     events, msgs, _ = web_turn([web_call("k3", leak), AIMessage(content="That is the news.")],
                                "Any tariff news?", "kept-leak")
     assert _text(msgs[-1]) == REFUSAL_STRING, "kept text goes through the name check too"
+    # The live case: "should I raise my prices?" -> the decline written beside the members search
+    # (no tag) must stay, first, on screen and in the reply.
+    decline = ("I don't advise on business decisions. But I can connect you with members who've "
+               "navigated pricing.")
+    events, msgs, _ = web_turn([members_call("k4", decline), AIMessage(content=members)],
+                               "So should I raise my prices?", "kept-decline")
+    assert _text(msgs[-1]) == f"{decline}\n\n{members}", _text(msgs[-1])
+    assert ("kept", decline) in events, events
+    for said in ("We don’t give business advice here.", "I can't advise on that.",
+                 "I do not advise on pricing."):
+        assert keeps(said), said
+    for said in (narration, "Let me find members who advise on pricing.", "Advice: raise them."):
+        assert not keeps(said), said
     print("24. cited text from before a tool call stays in the reply, in order, and on screen; "
-          "narration goes; kept text is name-checked")
+          "so does a 'we don't advise' decline; narration goes; kept text is name-checked")
 
     # 25 -- D-059 members check: a news-meets-your-business answer that never searched the
     # network goes back ONCE for the members part; the answer so far is kept whole.
@@ -1520,4 +1613,40 @@ if __name__ == "__main__":
         "Searching the web: us tariffs latest · Finding members: construction materials "
         "manufacturers…"), events
     print("26. steps started together show as one status line in plain words")
+
+    # 27 -- D-064: news and "should I" turns search members with the asker's industry in front
+    # and get a wider pool to trim to three; other searches are unchanged.
+    assert industry_of([{"text": "x\n- **Industry:** Pet Care / Consumer Products (Safety) "
+                                 "[cite: 3]."}]) == "Pet Care / Consumer Products"
+    assert industry_of([{"text": "**Industry Adaptation:** pivoted; industry downturn"}]) == ""
+    assert anchored("banking tech; vendors", "Banking Tech") == "banking tech; vendors"
+    assert asker.industry, "the test asker's dossier has an Industry line"
+
+    def result(msgs, call_id):
+        return json.loads(next(_text(m) for m in msgs
+                               if isinstance(m, ToolMessage) and m.tool_call_id == call_id))
+
+    both = AIMessage(content="", tool_calls=[
+        {"name": "web_search", "id": "w27", "args": {"query": "us tariffs latest"}},
+        {"name": "find_members", "id": "m27", "args": {"criterion": "steel manufacturing"}}])
+    _, msgs, _ = web_turn([both, AIMessage(content=f"{news}\n\n{members}")],
+                          "How do tariffs affect my business?", "anchor-news")
+    got = result(msgs, "m27")
+    assert got["searched_for"] == f"{asker.industry}; steel manufacturing", got["searched_for"]
+    assert got["instruction"] == MEMBERS_PICK and len(got["members"]) == MEMBER_POOL
+    _, msgs, _ = web_turn([members_call("m28"), AIMessage(content=members)],
+                          "So should I raise my prices?", "anchor-advice")
+    assert result(msgs, "m28")["searched_for"].startswith(asker.industry)
+    _, msgs, _ = web_turn([members_call("m29"), AIMessage(content=members)],
+                          "Who works in steel manufacturing?", "plain-search")
+    got = result(msgs, "m29")
+    assert "searched_for" not in got and "instruction" not in got and len(got["members"]) <= 5
+    _, msgs, _ = web_turn([web_call("g27"), AIMessage(content=first), AIMessage(content=members)],
+                          "How will the tariffs affect my business?", "anchor-guard")
+    got = next(json.loads(_text(m)) for m in msgs if isinstance(m, ToolMessage)
+               and m.tool_call_id.startswith(GUARD_ID))
+    assert len(got["members"]) == MEMBER_POOL and "three who fit best" in got["instruction"]
+    print(f"27. news and 'should I' turns search members with the asker's industry in front, "
+          f"{MEMBER_POOL} candidates, told to name the three that fit (never padded); other "
+          "searches unchanged")
     print("agent self-check passed")

@@ -232,7 +232,8 @@ class Toolbox:
         }
 
     def find_members(self, criterion: str, exclude_person_ids: list[str] | None = None,
-                     within_person_ids: list[str] | None = None) -> dict:
+                     within_person_ids: list[str] | None = None, top: int | None = None,
+                     per_member: int | None = None) -> dict:
         """Discover members by criterion (aggregate flow). Wide sweep -> group by person ->
         rank by evidence strength -> top members with supporting snippets. The ASKER is always
         excluded (members never appear in their own results). within_person_ids re-queries INSIDE a prior result
@@ -252,7 +253,8 @@ class Toolbox:
         ts = _now()
 
         per_person: dict[str, list[CorpusEvidence]] = {}
-        limit, unranked = TOP_N_MEMBERS, False
+        # top: a wider pool the model trims itself (news / "should I" turns, D-064); else the cap.
+        limit, unranked = top or TOP_N_MEMBERS, False
         if within_person_ids is not None:
             # Narrowing a list the member already saw: every listed person is searched
             # person-scoped, so nobody drops out by losing a global ranking race.
@@ -269,10 +271,10 @@ class Toolbox:
             considered = len(per_person)
         elif HYBRID_SEARCH:
             unranked = self.model_picks
-            limit = CANDIDATES_FOR_MODEL if unranked else TOP_N_MEMBERS
+            limit = CANDIDATES_FOR_MODEL if unranked else limit
             order, sections = hybrid.rank_people(
                 self.conn, qvec, criterion, SCHEME, keep=lambda p: p not in excluded, top=limit,
-                per_person=CANDIDATE_PASSAGES if unranked else SNIPPETS_PER_MEMBER)
+                per_person=CANDIDATE_PASSAGES if unranked else per_member or SNIPPETS_PER_MEMBER)
             ranked = [(pid, [self._as_evidence(r, ts) for r in sections[pid]])
                       for pid in order[:limit]]
             if unranked:

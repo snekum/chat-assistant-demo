@@ -34,7 +34,8 @@ Checks (on the turn that carries "expect"):
               (the link is not in their summary).
   news_ask    the asker's profile does not show the link: searched the web, asked a question
               ("self_lookup" as above: after reading their own full profile).
-  no_advice   "so should I ...?": names at least one member or searches for them.
+  no_advice   "so should I ...?": says we don't advise, and names at least one member or searches
+              for them.
 A conversation may set "asker" (a person_id; default: the first member in name order) and
 "web": true (the agent runs with web search; WEB_MODE=live records fixtures, replay reads them).
 Every draft is fact-checked by a second provider before the card (D-057); each check is recorded
@@ -228,10 +229,11 @@ def turn_evidence(new_msgs: list, asker: str) -> dict:
 
 
 # --- news answers (D-059) --------------------------------------------------------------------
-# TUNABLE(D-062, a product limit: slower news answers are fine while the member sees progress, but
-#   a web turn's whole answer, members included, must arrive within 20 s. Symptom wrong: answers
-#   under 20 s still feel too slow in use -> lower; raising it is a product decision, not a tweak.)
-NEWS_TURN_LIMIT_S = 20
+# TUNABLE(D-065, a product target, replacing D-062's 20 s whole-answer cap: on a web turn the
+#   answer's first words may take up to 7 s (status lines show progress before that); the whole
+#   answer has no limit. Reported as the typical turn (p50) plus a count of turns over it. Symptom
+#   wrong: 7 s first words still feel slow in use -> lower; changing it is a product decision.)
+NEWS_FIRST_WORDS_S = 7
 NEWS_KINDS = ("news_link", "news_ask", "no_advice")
 # TUNABLE(the forecast/advice scan: a sentence is flagged when it pairs "your <business thing>"
 #   with a forecast word, or tells the member what to do. Questions and sentences about talking to
@@ -304,6 +306,8 @@ def check_news(expect: dict, ev: dict, named: list[str], asker_name: str) -> dic
         problems.append("no question")
     if kind == "no_advice" and not (named or ev["searches"]):
         problems.append("offered no members")
+    if kind == "no_advice" and not agent.DECLINE.search(ev["reply"]):
+        problems.append("did not say we don't advise")   # live 2026-11-25: members, no decline
     # Forecast/advice sentences are COUNTED, not failed (D-060: an occasional hedged sentence is
     # acceptable; the scan also misses most real ones, so every news reply is read by hand). The
     # sentences themselves go to results.jsonl only: they can name people.
@@ -556,11 +560,24 @@ def summarize(rows: list[dict]) -> dict:
                           "turns_showing_pre_tool_text": sum(1 for r in ran
                                                              if r.get("pre_tool_text_s"))},
         "turn_s_p50": pct([r["turn_s"] for r in ran], .5),
-        # D-062: a web turn's whole answer within NEWS_TURN_LIMIT_S.
-        "web_turns": {"n": len(web_turns), "turn_s_p50": pct([r["turn_s"] for r in web_turns], .5),
-                      "turn_s_max": max([r["turn_s"] for r in web_turns], default=None),
-                      "over_limit": sum(1 for r in web_turns if r["turn_s"] > NEWS_TURN_LIMIT_S),
-                      "limit_s": NEWS_TURN_LIMIT_S},
+        # D-065: a web turn's first answer words within NEWS_FIRST_WORDS_S; whole turn reported only.
+        "web_turns": {"n": len(web_turns),
+                      "first_words_p50": pct([r["first_words_s"] for r in web_turns
+                                              if r.get("first_words_s")], .5),
+                      "first_words_max": max([r["first_words_s"] for r in web_turns
+                                              if r.get("first_words_s")], default=None),
+                      "over_target": sum(1 for r in web_turns if (r.get("first_words_s") or 0)
+                                         > NEWS_FIRST_WORDS_S),
+                      "target_s": NEWS_FIRST_WORDS_S,
+                      "first_status_max": max([r["steps"][0][0] for r in web_turns
+                                               if r.get("steps")], default=None),
+                      "turn_s_p50": pct([r["turn_s"] for r in web_turns], .5),
+                      "turn_s_max": max([r["turn_s"] for r in web_turns], default=None)},
+        # D-064: news and "should I" turns aim for three members that fit. Counted, not failed:
+        # fewer is right when fewer fit (the reply should say so) -- read those turns by hand.
+        "news_members": {"turns": len(news_rows := [r for r in ran if (r.get("expect") or {})
+                                                    .get("kind") in NEWS_KINDS]),
+                         "fewer_than_3": sum(1 for r in news_rows if len(r["named"] or []) < 3)},
         # Counts only: the text itself stays in results.jsonl (it can name members).
         "tool_round_text": {"turns_with_kept": sum(1 for r in ran if len(
                                 r.get("tool_round_text") or []) > len(r.get("dropped_text") or [])),
@@ -938,7 +955,7 @@ def selfcheck() -> None:
                          in ("news_link", "news_ask")]
     assert all(r["steps"] for r in right_rows if r["tool_calls"]), "a tool turn showed no status"
     assert right["web_turns"]["n"] == len(news(right_rows)) and \
-        right["web_turns"]["over_limit"] == 0, right["web_turns"]
+        right["web_turns"]["over_target"] == 0, right["web_turns"]
     assert not any(r["members_check"] for r in news(right_rows)), "check fired on a right answer"
     assert all(r["members_check"] for r in news(wrong_rows)), "check missed a no-members answer"
     print(f"3. all {len(timed)} turns timed (first words, or time to the card on draft turns); "
