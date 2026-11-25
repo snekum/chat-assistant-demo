@@ -32,6 +32,7 @@ import logging
 import re
 import time
 from dataclasses import dataclass
+from datetime import date
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -107,7 +108,10 @@ def _text(msg) -> str:
 # for them; the tags exist for the system -- fabricated-citation scoring (D-020), claim-level
 # verification later, and tracing a complaint to the excerpt that produced it. [web: ...] tags
 # are kept: once web search exists they become links a user CAN check.
-_HIDDEN_TAG = re.compile(r"[ \t]*\[(?:profile:[^\]]*|self|stated)\]", re.IGNORECASE)
+# A made-up web tag with no "web:" source ("[web search result]", seen on member facts that came
+# from dossiers, 2026-11-24) is hidden too: it is uncheckable and credits a profile fact to the web.
+_HIDDEN_TAG = re.compile(r"[ \t]*\[(?:profile:[^\]]*|self|stated|web(?!\s*:)[^\]]*)\]",
+                         re.IGNORECASE)
 _WEB_TAG = re.compile(r"\[web:\s*([^\],]+?)\s*(?:,\s*([^\]]*?))?\s*\]", re.IGNORECASE)
 
 
@@ -355,6 +359,78 @@ def _since_member(messages) -> list:
     return list(messages)
 
 
+# D-061: text the model writes alongside a tool call is part of the reply only if it cites a
+# source. Real cases (2026-11-24): narration ("I'll search for the latest...") never cites; the
+# news half of an answer written before the members search always did. Known cost: an uncited
+# real sentence written in a tool round is dropped -- the eval rows list dropped text to read.
+_SOURCE_TAG = re.compile(r"\[(?:web:|self\]|stated\]|profile:)", re.IGNORECASE)
+# The members check's own entry in the thread (a tool call it adds, never a real search).
+GUARD_ID = "guard-members-"
+# TUNABLE(a member asking about themselves: "my business", "affect us", "matters to me". D-059's
+#   news-meets-your-business answers must name members; a plain news question ("what did the Fed
+#   do?") need not. Symptom wrong: a news-about-me turn ends with no members and the check did not
+#   fire -> widen; a plain news question gets a members section tacked on -> narrow.)
+ABOUT_ME = re.compile(r"\b(my|our|us|me|we)\b", re.IGNORECASE)
+MEMBERS_MISSING = (
+    "Your text above is already shown to the member as the start of your answer. They asked how "
+    "the news meets their business, so the answer must also name members of the network who work "
+    "in the affected area or have dealt with it. These members were found for what you searched "
+    "the web for. Now write ONLY the members part, to follow your text: the two or three who fit "
+    "best, a line or two each, from their passages. Don't repeat anything above and don't search "
+    "again.")
+MEMBERS_UNAVAILABLE = ("The members search could not run. Add one sentence saying you could not "
+                       "search the network just now. Don't repeat anything above.")
+# TUNABLE(news-query filler stripped before a members search on the turn's web queries: words
+#   that describe "news", not the topic. Symptom wrong: members matched on "news"/"2026" in their
+#   dossiers -> add the word; a topic word lost -> remove it.)
+_NEWS_FILLER = re.compile(
+    r"\b(news|latest|recent|update[sd]?|today|this|week|month|year|current|20\d\d|january|"
+    r"february|march|april|may|june|july|august|september|october|november|december)\b",
+    re.IGNORECASE)
+# TUNABLE(at most 3 of the turn's web queries make the members criterion: enough to carry a broad
+#   "what news matters to me" turn's topics; more dilutes the search. Symptom wrong: members fit
+#   only the first topic -> raise; members fit none well -> lower.)
+MEMBERS_CRITERION_QUERIES = 3
+
+
+def members_criterion(messages) -> str:
+    """What the members check searches for: this turn's web queries, minus news filler (the
+    member's question can name no topic at all: "any news this month that matters to me?")."""
+    queries = []
+    for m in _since_member(messages):
+        for c in (m.tool_calls if isinstance(m, AIMessage) else None) or []:
+            q = " ".join(_NEWS_FILLER.sub(" ", str(c["args"].get("query", ""))).split())
+            if c["name"] == "web_search" and q and q not in queries:
+                queries.append(q)
+    user = next((_text(m) for m in reversed(messages) if isinstance(m, HumanMessage)), "")
+    return "; ".join(queries[:MEMBERS_CRITERION_QUERIES]) or user
+
+
+def kept_tool_round_text(messages) -> list[str]:
+    """This turn's text written alongside tool calls that belongs in the reply (D-061): text
+    that cites a source, or a whole answer the members check sent back for its missing part."""
+    out = []
+    for m in _since_member(messages):
+        if not (isinstance(m, AIMessage) and m.tool_calls and _text(m).strip()):
+            continue
+        guarded = any(c["id"].startswith(GUARD_ID) for c in m.tool_calls)
+        if guarded or _SOURCE_TAG.search(_text(m)):
+            out.append(_text(m).strip())
+    return out
+
+
+def members_missing(messages) -> bool:
+    """D-059: a turn that found news and is about the member's own business, yet never searched
+    the network. The prompt rule alone failed twice on the same conversation (2026-11-24)."""
+    turn = _since_member(messages)
+    user = next((_text(m) for m in reversed(messages) if isinstance(m, HumanMessage)), "")
+    web_ok = any(isinstance(m, ToolMessage) and m.name == "web_search"
+                 and '"ok": true' in _text(m) for m in turn)
+    searched = any(c["name"] == "find_members" for m in turn if isinstance(m, AIMessage)
+                   for c in (m.tool_calls or []))
+    return web_ok and not searched and bool(ABOUT_ME.search(user))
+
+
 def _redrafted(messages) -> bool:
     """D-057: one automatic redraft per request; after that, the card shows what is unconfirmed."""
     return any(isinstance(m, ToolMessage) and m.name == "send_intro" and UNSUPPORTED in _text(m)
@@ -572,24 +648,54 @@ def build_agent(emb, conn, resolver, checkpointer, model=None, web_enabled=WEB_S
     @dynamic_prompt
     def system_prompt(request: ModelRequest) -> str:
         a: Asker = request.runtime.context
-        return (f"{core}\n\n## The member you are speaking with\nName: {a.name}\n"
+        # News answers need today's date ("anything this month?", D-059). It goes in this
+        # per-member block, after the fixed instructions, so the cached prefix stays stable; the
+        # real date, not _clock, which the evals fake to expire the cache.
+        today = f"Today's date: {date.today().isoformat()}\n" if web_enabled else ""
+        return (f"{core}\n\n## The member you are speaking with\n{today}Name: {a.name}\n"
                 f"person_id: {a.person_id}\nTheir own profile summary (cite it as [self]):\n"
                 f"{a.profile_summary}")
 
-    @after_model
-    def name_check(state: AgentState, runtime) -> dict | None:
-        """Fail safe: a final reply naming a member the conversation never surfaced is replaced
-        with the refusal sentence before it is saved or shown. Full-name pairs only."""
+    @after_model(can_jump_to=["model"])
+    def finish_reply(state: AgentState, runtime) -> dict | None:
+        """Runs on each finished reply, before it is saved or shown, in this order:
+        1. Members check (D-059): a news-meets-your-business answer that never searched the
+           network goes back once to add members. The answer so far becomes a tool round (kept
+           whole by step 2), with a tool result saying what is missing; no fake member message,
+           so turn boundaries stay where the member put them.
+        2. Earlier text that cites a source joins the front of the reply (D-061).
+        3. Fail safe: a reply naming a member the conversation never surfaced is replaced with
+           the refusal sentence. Full-name pairs only."""
         last = state["messages"][-1]
         if not isinstance(last, AIMessage) or last.tool_calls:
             return None
-        allowed = set(resolver.full_names(_shown_text(state["messages"][:-1])))
+        earlier = state["messages"][:-1]
+        if web_enabled and members_missing(state["messages"]):
+            # D-062 option A: the check runs the members search itself, on what the turn
+            # searched the web for, so the model needs one more call (write the members part),
+            # not two (start a search, then write) -- ~4-5 s off a turn that is already long.
+            call_id = f"{GUARD_ID}{last.id}"
+            criterion = members_criterion(state["messages"])
+            box = Toolbox(emb, conn, resolver, asker=runtime.context.person_id,
+                          model_picks=model_picks)
+            found = json.loads(_model_view(box.find_members(criterion)))
+            found["instruction"] = MEMBERS_MISSING if found.get("ok") else MEMBERS_UNAVAILABLE
+            log.info("members check: news answer had no members search; searched for it")
+            return {"messages": [
+                last.model_copy(update={"content": _text(last), "tool_calls": [
+                    {"name": "find_members", "id": call_id, "args": {"criterion": criterion},
+                     "type": "tool_call"}]}),
+                ToolMessage(content=_dump(found), tool_call_id=call_id, name="find_members")],
+                "jump_to": "model"}
+        kept = kept_tool_round_text(earlier)
+        reply = "\n\n".join(kept + [_text(last).strip()]) if kept else _text(last)
+        allowed = set(resolver.full_names(_shown_text(earlier)))
         allowed.add(runtime.context.person_id)
-        leaked = set(resolver.full_names(_text(last))) - allowed
-        if not leaked:
-            return None
-        log.warning("name check replaced a reply naming %d unretrieved member(s)", len(leaked))
-        return {"messages": [AIMessage(id=last.id, content=REFUSAL_STRING)]}
+        leaked = set(resolver.full_names(reply)) - allowed
+        if leaked:
+            log.warning("name check replaced a reply naming %d unretrieved member(s)", len(leaked))
+            return {"messages": [AIMessage(id=last.id, content=REFUSAL_STRING)]}
+        return {"messages": [last.model_copy(update={"content": reply})]} if kept else None
 
     if model is None:
         # Automatic prompt caching, passed straight through to the Messages API. The
@@ -605,7 +711,7 @@ def build_agent(emb, conn, resolver, checkpointer, model=None, web_enabled=WEB_S
         model,
         tools=[find_members, get_person_evidence, send_intro]
         + ([web_search] if web_enabled else []),
-        middleware=[system_prompt, name_check, approval, DropOldSearchResults(),
+        middleware=[system_prompt, finish_reply, approval, DropOldSearchResults(),
                     ModelCallLimitMiddleware(run_limit=MODEL_CALL_LIMIT, exit_behavior="end")],
         context_schema=Asker,
         checkpointer=checkpointer,
@@ -644,7 +750,9 @@ class ChatService:
         return sorted((name, pid) for pid, name in self.resolver.name_of.items())
 
     def ask(self, thread_id: str, person_id: str, text: str):
-        """Yields ("status", str) while tools run, ("partial", str) as the reply streams --
+        """Yields ("status", str) while tools run, ("kept", str) when earlier text will stay in
+        the reply (D-061: show it, with any later status under it), ("partial", str) as the reply
+        streams --
         already checked, safe to show -- then exactly one of: ("reply", str), the stored reply, which is authoritative;
         or ("approval", dict), a message waiting for the member's decision (see decide).
         Typing while a message waits means "not that one": it is declined with their words as
@@ -758,6 +866,50 @@ def resume_turn(agent, resolver, thread_id: str, asker: Asker, decision: dict):
                        Command(resume={"decisions": [decision]}), [])
 
 
+# TUNABLE(40 characters of a search's wording in the status line: enough to recognise the topic,
+#   short enough that three steps fit on one line of a phone screen. Symptom wrong: statuses wrap
+#   to several lines -> lower; topics cut to the point of meaning nothing -> raise.)
+STATUS_TOPIC_CHARS = 40
+STATUS_SEP = " · "   # joins steps started together; the chat app splits on it to rotate them (D-063)
+
+
+def step_status(tool_calls, asker: Asker) -> str:
+    """One status line for EVERYTHING a model step started. Calls made together arrive together;
+    one status each meant only the last stayed on screen (a news turn showed the members search
+    for the whole web search, 2026-11-24). Plain words, not the tool's raw arguments."""
+    def topic(text: str) -> str:
+        text = " ".join(str(text or "").split())
+        return text if len(text) <= STATUS_TOPIC_CHARS else \
+            text[:STATUS_TOPIC_CHARS].rsplit(" ", 1)[0] + "…"
+
+    def grouped(label: str, topics: list[str]) -> str:
+        more = f" and {len(topics) - 1} more" if len(topics) > 1 else ""
+        return f"{label}: {topic(topics[0])}{more}" if topics[0] else label
+
+    web, members, steps = [], [], []
+    own = others = False
+    for c in tool_calls:
+        args = c.get("args") or {}
+        if c["id"].startswith(GUARD_ID):
+            steps.append("Adding members who have dealt with this")
+        elif c["name"] == "web_search":
+            web.append(args.get("query", ""))
+        elif c["name"] == "find_members":
+            members.append(args.get("criterion", ""))
+        elif c["name"] == "send_intro":             # D-057: checked before the card
+            steps.append("Checking the draft against their profile")
+        elif c["name"] == "get_person_evidence":
+            refs = {str(r).strip().lower() for r in args.get("person_refs") or []}
+            mine = {asker.person_id.lower(), asker.name.strip().lower()}
+            own = own or bool(refs & mine)
+            others = others or bool(refs - mine)
+    order = [grouped("Searching the web", web) if web else None,
+             "Checking your profile" if own else None,
+             "Reading their profiles" if others else None,
+             grouped("Finding members", members) if members else None]
+    return STATUS_SEP.join([s for s in order if s] + steps) or "Looking into it"
+
+
 def _stream(agent, resolver, thread_id: str, asker: Asker, payload, new_msgs: list):
     config = {"configurable": {"thread_id": thread_id}}
     seen = list(agent.get_state(config).values.get("messages", [])) + new_msgs
@@ -765,20 +917,23 @@ def _stream(agent, resolver, thread_id: str, asker: Asker, payload, new_msgs: li
     guard, guard_id, tool_rounds = None, None, set()
     allowed = set(resolver.full_names(_shown_text(seen))) | {asker.person_id}
     calls: dict = {}                              # this model call's tool calls, by index
+    kept: list[str] = []      # earlier text that stays in the reply (D-061), held on screen
     for mode, part in agent.stream(payload, config=config, context=asker,
                                    stream_mode=["updates", "messages"]):
         if mode == "updates":
             for node in part.values():
                 for m in (node or {}).get("messages", []) if isinstance(node, dict) else []:
                     seen.append(m)
-                    for call in getattr(m, "tool_calls", None) or []:
-                        what = call["args"].get("criterion") or call["args"].get("query") or ""
-                        if call["name"] == "web_search":
-                            yield "status", f"Searching the web: {what}"
-                        elif call["name"] == "send_intro":    # D-057: checked before the card
-                            yield "status", "Checking the draft against their profile"
-                        else:
-                            yield "status", f"Looking into: {what}" if what else "Looking into it"
+                    if getattr(m, "tool_calls", None):
+                        # Text finish_reply will keep (D-061: cited, or a whole answer the
+                        # members check sent back) stays on screen, the status line under it.
+                        text = _text(m).strip()
+                        if text and (any(c["id"].startswith(GUARD_ID) for c in m.tool_calls)
+                                     or _SOURCE_TAG.search(text)) \
+                                and not set(resolver.full_names(text)) - allowed:
+                            kept.append(text)
+                            yield "kept", "\n\n".join(kept)
+                        yield "status", step_status(m.tool_calls, asker)
                     if isinstance(m, ToolMessage) and m.name == "send_intro" \
                             and UNSUPPORTED in _text(m):
                         yield "status", "Rewriting a detail their profile doesn't support"
@@ -805,7 +960,7 @@ def _stream(agent, resolver, thread_id: str, asker: Asker, payload, new_msgs: li
         shown = guard.feed(_text(chunk))
         if shown:
             first_words = first_words or time.perf_counter() - t0
-            yield "partial", shown
+            yield "partial", "\n\n".join(kept + [shown])
     took = time.perf_counter() - t0
     words = f"{first_words:.2f}s" if first_words else "n/a"
     pending = pending_approval(agent, resolver, thread_id, asker)
@@ -864,14 +1019,16 @@ if __name__ == "__main__":
             self.seen.append(list(messages))
             msg = next(self.messages)
             if msg.tool_calls:
+                # As the API does: any text the model writes comes first, then the tool calls.
+                for piece in re.findall(r"\S+\s*", _text(msg)):
+                    yield ChatGenerationChunk(message=AIMessageChunk(content=piece))
                 # Arguments arrive in pieces, as the API streams them (a drafted message is
                 # shown from these pieces); name and id ride on each call's first piece only.
                 for i, c in enumerate(msg.tool_calls):
                     raw = json.dumps(c["args"])
                     for k in range(0, len(raw), 24):
                         yield ChatGenerationChunk(message=AIMessageChunk(
-                            content=msg.content if (i, k) == (0, 0) else "",
-                            tool_call_chunks=[{"name": c["name"] if k == 0 else None,
+                            content="", tool_call_chunks=[{"name": c["name"] if k == 0 else None,
                                                "args": raw[k:k + 24],
                                                "id": c["id"] if k == 0 else None, "index": i}]))
                 return
@@ -932,11 +1089,13 @@ if __name__ == "__main__":
     print("5. thread memory: second turn carries the first")
     # 6 -- display: profile/self/stated tags hidden, web tags and line breaks kept.
     raw = ("He founded it in 2021 [profile: Jane Rivera]. You met in Lagos [stated].\n\n"
-           "Your firm grew [self]. Rates rose [web: Reuters, 2026].")
+           "Your firm grew [self]. Rates rose [web: Reuters, 2026]. She runs a mill "
+           "[web search result].")
     shown = render_reply(raw)
     assert shown == ("He founded it in 2021. You met in Lagos.\n\nYour firm grew. "
-                     "Rates rose [web: Reuters, 2026]."), shown
-    print("6. display hides profile/self/stated tags, keeps web tags and paragraphs")
+                     "Rates rose [web: Reuters, 2026]. She runs a mill."), shown
+    print("6. display hides profile/self/stated tags and made-up web tags, keeps real web tags "
+          "and paragraphs")
 
     # 7 -- web search on a RECORDED result (replay mode, temp fixture dir): no network, no key.
     import os
@@ -1276,4 +1435,89 @@ if __name__ == "__main__":
     assert out["error"] == "not_sent" and pending_approval(agent, resolver, "intro", asker) is None
     print("23. a poor-fit heads-up shows on the card and is never sent; a note may suggest only "
           "members already shown")
+
+    # 24 -- D-061: text written alongside a tool call stays in the reply when it cites a source,
+    # in order, and stays on screen while later steps run; narration ("I'll search...") goes.
+    def web_turn(script, text, thread):
+        model = Scripted(messages=iter(script))
+        agent = build_agent(emb, conn, resolver, InMemorySaver(), model=model, web_enabled=True)
+        events = list(stream_turn(agent, resolver, thread, asker, text))
+        msgs = agent.get_state({"configurable": {"thread_id": thread}}).values["messages"]
+        return events, msgs, model.calls
+
+    def web_call(cid, words=""):
+        return AIMessage(content=words, tool_calls=[{"name": "web_search", "id": cid,
+                                                     "args": {"query": "us tariffs latest"}}])
+
+    def members_call(cid, words=""):
+        return AIMessage(content=words, tool_calls=[{"name": "find_members", "id": cid,
+                                                     "args": {"criterion": "steel manufacturing"}}])
+
+    narration = "I'll search for the latest tariff news and check your profile."
+    news = f"Steel tariffs rose to 50% {tag}. Your firm makes wire products [self]."
+    members = "Members in steel manufacturing have dealt with duties like these."
+    events, msgs, n = web_turn([web_call("k1", narration), members_call("k2", news),
+                                AIMessage(content=members)],
+                               "How will the tariffs affect my business?", "kept")
+    assert n == 3 and _text(msgs[-1]) == f"{news}\n\n{members}", _text(msgs[-1])
+    assert events[-1] == ("reply", f"{news}\n\n{members}"), events[-1]
+    partials = [t for k, t in events if k == "partial"]
+    assert partials[-1].startswith(news) and not partials[-1].startswith(narration), partials[-1]
+    i = events.index(("kept", news))      # stays on screen while the members search runs
+    assert events[i + 1][0] == "status" and not any(
+        k == "kept" and narration in t for k, t in events), events
+    assert kept_tool_round_text([HumanMessage(content="q"), AIMessage(
+        content="Rates rose sharply.", tool_calls=[{"name": "web_search", "id": "u",
+                                                    "args": {"query": "x"}}])]) == [], \
+        "uncited tool-round text is dropped (the known cost of D-061)"
+    leak = f"{resolver.name_of[two]} runs a mill {tag}."
+    events, msgs, _ = web_turn([web_call("k3", leak), AIMessage(content="That is the news.")],
+                               "Any tariff news?", "kept-leak")
+    assert _text(msgs[-1]) == REFUSAL_STRING, "kept text goes through the name check too"
+    print("24. cited text from before a tool call stays in the reply, in order, and on screen; "
+          "narration goes; kept text is name-checked")
+
+    # 25 -- D-059 members check: a news-meets-your-business answer that never searched the
+    # network goes back ONCE for the members part; the answer so far is kept whole.
+    first = f"Steel tariffs rose to 50% {tag}."
+    events, msgs, n = web_turn([web_call("g1"), AIMessage(content=first),
+                                AIMessage(content=members)],
+                               "How will the tariffs affect my business?", "guard")
+    # D-062 A: the check searched itself -> ONE more model call (3 in all, not 4), no re-check.
+    assert n == 3 and _text(msgs[-1]) == f"{first}\n\n{members}", (n, _text(msgs[-1]))
+    found = json.loads(next(_text(m) for m in msgs if isinstance(m, ToolMessage)
+                            and m.tool_call_id.startswith(GUARD_ID)))
+    assert found["ok"] and found["members"] and found["instruction"] == MEMBERS_MISSING
+    assert members_criterion(msgs) == "us tariffs", members_criterion(msgs)
+    assert asker.person_id not in {p["person_id"] for p in found["members"]}
+    i = events.index(("kept", first))     # the news stays up; the status goes under it
+    assert events[i + 1] == ("status", "Adding members who have dealt with this"), events[i:i + 2]
+    assert [t for k, t in events if k == "partial"][-1].startswith(first)
+    _, msgs, n = web_turn([web_call("g4"), AIMessage(content=first)],
+                          "What happened with steel tariffs this week?", "plain-news")
+    assert n == 2 and _text(msgs[-1]) == first, "a plain news question needs no members"
+    print("25. a news-about-your-business answer with no members search gets them added: the "
+          "check searches on the web topics, one more model call, answer kept on screen; plain "
+          "news questions are left alone")
+
+    # 26 -- steps started together show together, in plain words (not the tool's arguments).
+    together = [{"name": "web_search", "id": "a", "args": {"query": "steel tariffs"}},
+                {"name": "web_search", "id": "b", "args": {"query": "steel import duties"}},
+                {"name": "get_person_evidence", "id": "c",
+                 "args": {"query": "markets suppliers", "person_refs": [asker.person_id]}},
+                {"name": "find_members", "id": "d", "args": {
+                    "criterion": "construction materials manufacturers dealing with tariff "
+                                 "pressure on steel"}}]
+    line = step_status(together, asker)
+    assert line == ("Searching the web: steel tariffs and 1 more · Checking your profile · "
+                    "Finding members: construction materials manufacturers…"), line
+    assert step_status([{"name": "get_person_evidence", "id": "e", "args": {
+        "query": "q", "person_refs": [other]}}], asker) == "Reading their profiles"
+    events, _, _ = web_turn([AIMessage(content="", tool_calls=[
+        {**together[0], "args": {"query": "us tariffs latest"}}, together[3]]),
+        AIMessage(content=f"{news}\n\n{members}")], "How do tariffs affect my business?", "st")
+    assert [p for k, p in events if k == "status"][0] == (
+        "Searching the web: us tariffs latest · Finding members: construction materials "
+        "manufacturers…"), events
+    print("26. steps started together show as one status line in plain words")
     print("agent self-check passed")

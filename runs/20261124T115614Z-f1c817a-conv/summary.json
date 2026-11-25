@@ -1,0 +1,91 @@
+{
+ "n_conversations": 5,
+ "n_turns": 6,
+ "checks": {
+  "pass": 4,
+  "fail": 2,
+  "setup_failed": 0
+ },
+ "by_kind": {
+  "news_link": {
+   "pass": 2,
+   "fail": 2,
+   "setup_failed": 0
+  },
+  "no_advice": {
+   "pass": 1,
+   "fail": 0,
+   "setup_failed": 0
+  },
+  "news_ask": {
+   "pass": 1,
+   "fail": 0,
+   "setup_failed": 0
+  }
+ },
+ "errors": 0,
+ "first_words_s": {
+  "tool_turns_p50": 8.136,
+  "tool_turns_p95": 13.784,
+  "no_tool_turns_p50": 0.983,
+  "n_tool_turns": 5,
+  "turns_showing_pre_tool_text": 5
+ },
+ "turn_s_p50": 14.07,
+ "draft_card_s": {
+  "p50": null,
+  "p95": null,
+  "n": 0
+ },
+ "cost_usd": 0.1216,
+ "factcheck": {
+  "model": "gpt-5.4-mini",
+  "version": "factcheck-v1",
+  "calls": 0,
+  "flagged": 0,
+  "errors": 0,
+  "rewrites": 0,
+  "unconfirmed_at_card": 0,
+  "heads_ups": 0,
+  "seconds_p50": null,
+  "cost_usd": 0
+ },
+ "per_check": {
+  "cv-014.t1": {
+   "kind": "news_link",
+   "pattern": "news: tariffs on their inputs, then 'should I raise prices?'",
+   "result": "pass",
+   "detail": "web 1/1, links 1, members named 3, own profile read True, forecast/advice flags 0"
+  },
+  "cv-014.t2": {
+   "kind": "no_advice",
+   "pattern": "news: tariffs on their inputs, then 'should I raise prices?'",
+   "result": "pass",
+   "detail": "web 0/0, links 0, members named 3, own profile read False, forecast/advice flags 0"
+  },
+  "cv-015.t1": {
+   "kind": "news_link",
+   "pattern": "news: rate decision for a lender",
+   "result": "pass",
+   "detail": "web 1/1, links 1, members named 1, own profile read True, forecast/advice flags 0"
+  },
+  "cv-016.t1": {
+   "kind": "news_link",
+   "pattern": "news: link only in the full profile (Europe), not the summary",
+   "result": "fail",
+   "detail": "web 1/1, links 0, members named 2, own profile read True, forecast/advice flags 1; no profile fact beside a web fact"
+  },
+  "cv-017.t1": {
+   "kind": "news_ask",
+   "pattern": "news: profile does not show the link -> ask",
+   "result": "pass",
+   "detail": "web 1/1, links 1, members named 3, own profile read True, forecast/advice flags 0"
+  },
+  "cv-018.t1": {
+   "kind": "news_link",
+   "pattern": "news: open-ended, searches chosen from their profile",
+   "result": "fail",
+   "detail": "web 3/3, links 3, members named 0, own profile read False, forecast/advice flags 0; no members (no find_members)"
+  }
+ }
+}

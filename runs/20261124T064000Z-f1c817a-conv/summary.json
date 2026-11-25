@@ -1,0 +1,91 @@
+{
+ "n_conversations": 5,
+ "n_turns": 6,
+ "checks": {
+  "pass": 0,
+  "fail": 6,
+  "setup_failed": 0
+ },
+ "by_kind": {
+  "news_link": {
+   "pass": 0,
+   "fail": 4,
+   "setup_failed": 0
+  },
+  "no_advice": {
+   "pass": 0,
+   "fail": 1,
+   "setup_failed": 0
+  },
+  "news_ask": {
+   "pass": 0,
+   "fail": 1,
+   "setup_failed": 0
+  }
+ },
+ "errors": 0,
+ "first_words_s": {
+  "tool_turns_p50": 6.238,
+  "tool_turns_p95": 7.819,
+  "no_tool_turns_p50": 0.828,
+  "n_tool_turns": 5,
+  "turns_showing_pre_tool_text": 5
+ },
+ "turn_s_p50": 10.31,
+ "draft_card_s": {
+  "p50": null,
+  "p95": null,
+  "n": 0
+ },
+ "cost_usd": 0.0659,
+ "factcheck": {
+  "model": "gpt-5.4-mini",
+  "version": "factcheck-v1",
+  "calls": 0,
+  "flagged": 0,
+  "errors": 0,
+  "rewrites": 0,
+  "unconfirmed_at_card": 0,
+  "heads_ups": 0,
+  "seconds_p50": null,
+  "cost_usd": 0
+ },
+ "per_check": {
+  "cv-014.t1": {
+   "kind": "news_link",
+   "pattern": "news: tariffs on their inputs, then 'should I raise prices?'",
+   "result": "fail",
+   "detail": "web 1/1, links 1, members named 0, own profile read False; no members (no find_members)"
+  },
+  "cv-014.t2": {
+   "kind": "no_advice",
+   "pattern": "news: tariffs on their inputs, then 'should I raise prices?'",
+   "result": "fail",
+   "detail": "web 0/0, links 0, members named 0, own profile read False; offered no members"
+  },
+  "cv-015.t1": {
+   "kind": "news_link",
+   "pattern": "news: rate decision for a lender",
+   "result": "fail",
+   "detail": "web 1/1, links 1, members named 0, own profile read True; no members (no find_members)"
+  },
+  "cv-016.t1": {
+   "kind": "news_link",
+   "pattern": "news: link only in the full profile (Europe), not the summary",
+   "result": "fail",
+   "detail": "web 2/2, links 1, members named 0, own profile read False; no members (no find_members); did not read the asker's own profile"
+  },
+  "cv-017.t1": {
+   "kind": "news_ask",
+   "pattern": "news: profile does not show the link -> ask",
+   "result": "fail",
+   "detail": "web 1/1, links 1, members named 0, own profile read False; did not read the asker's own profile; 1 forecast/advice sentence(s)"
+  },
+  "cv-018.t1": {
+   "kind": "news_link",
+   "pattern": "news: open-ended, searches chosen from their profile",
+   "result": "fail",
+   "detail": "web 3/3, links 2, members named 0, own profile read False; no members (no find_members)"
+  }
+ }
+}

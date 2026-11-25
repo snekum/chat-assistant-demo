@@ -24,6 +24,19 @@ Checks (on the turn that carries "expect"):
               nothing for a reject). "shorter": the redraft after "make it shorter" is shorter.
               A message typed while a draft waits declines it with those words, as in the app.
   asks        the member asked for a message without saying why: no draft, a question back.
+  news_link   "how does this news affect my business?" (D-059): the agent searched the web, put a
+              fact from the asker's own profile ([self]/[stated]) beside a web-cited fact on the
+              same or the next line, and searched for members and named at least one.
+              Sentences forecasting or advising on the member's business are counted
+              (forecast_or_advice below), not failed: D-060 tolerates an occasional one, and
+              every news reply is read by hand.
+              "self_lookup": true also requires it to have read the asker's own full profile
+              (the link is not in their summary).
+  news_ask    the asker's profile does not show the link: searched the web, asked a question
+              ("self_lookup" as above: after reading their own full profile).
+  no_advice   "so should I ...?": names at least one member or searches for them.
+A conversation may set "asker" (a person_id; default: the first member in name order) and
+"web": true (the agent runs with web search; WEB_MODE=live records fixtures, replay reads them).
 Every draft is fact-checked by a second provider before the card (D-057); each check is recorded
 (time, cost, what it flagged), with the rewrites it caused and any claim still unconfirmed at
 the card. The scripted self-check uses a stub checker -- it never calls the second provider.
@@ -34,10 +47,13 @@ Turns run through agent.stream_turn, the chat app's own path, so every turn also
 to first words on screen (D-047). The eval owns the clock: +30 s per turn, plus any "pause_s"
 (a pause past the cache lifetime makes D-046 drop old search results, as in the live chat).
 
-Usage:  python eval/conversation_run.py               (paid; all conversations)
-        EVAL_LIMIT=1 python eval/conversation_run.py  (first N conversations)
-        EVAL_ONLY=cv-002,cv-003 python eval/conversation_run.py   (named conversations)
+Usage:  python eval/conversation_run.py --run         (PAID; all conversations)
+        EVAL_LIMIT=1 python eval/conversation_run.py --run  (first N conversations)
+        EVAL_ONLY=cv-002,cv-003 python eval/conversation_run.py --run   (named conversations)
+        python eval/conversation_run.py --quote       (free: exact token counts -> price)
         python eval/conversation_run.py --selfcheck   (offline: scripted model, real DB + tools)
+        Anything else prints usage and spends nothing (2026-11-24: a bare `--help` once ran the
+        paid eval).
 Writes runs/<ts>-<sha>-conv/ (config + summary committable and name-free -- people appear as list
 positions like "L1.3"; results.jsonl, which holds the replies, gitignored).
 """
@@ -73,6 +89,8 @@ import agent  # noqa: E402
 import cost  # noqa: E402
 import store  # noqa: E402
 import tools  # noqa: E402
+import web  # noqa: E402
+from contracts import WebEvidence  # noqa: E402
 from chat_run import usage_of  # noqa: E402
 import factcheck  # noqa: E402
 from outbox import MemoryOutbox  # noqa: E402
@@ -168,7 +186,9 @@ def turn_evidence(new_msgs: list, asker: str) -> dict:
     """What the agent did this turn: who get_person_evidence fetched, each find_members call
     (its arguments and who it returned), and the final reply."""
     calls = {c["id"]: c for m in new_msgs if isinstance(m, AIMessage) for c in (m.tool_calls or [])}
-    fetched, searches, sent_back = [], [], 0
+    fetched, searches, sent_back, self_lookup, web = [], [], 0, False, []
+    # The members check runs a real members search (D-062 A): it counts as a search.
+    guarded = any(c.startswith(agent.GUARD_ID) for c in calls)
     for m in new_msgs:
         if not isinstance(m, ToolMessage):
             continue
@@ -179,7 +199,12 @@ def turn_evidence(new_msgs: list, asker: str) -> dict:
         except json.JSONDecodeError:
             continue
         args = calls.get(m.tool_call_id, {}).get("args", {})
+        if m.name == "web_search":
+            web.append({"query": args.get("query"), "kind": args.get("kind", "news"),
+                        "ok": bool(out.get("ok")), "error": out.get("error"),
+                        "n": len(out.get("results", []))})
         if m.name == "get_person_evidence" and out.get("ok"):
+            self_lookup = self_lookup or any(p["person_id"] == asker for p in out["persons"])
             fetched += [p["person_id"] for p in out["persons"]
                         if p["person_id"] != asker and p["person_id"] not in fetched]
         elif m.name == "find_members":
@@ -187,8 +212,106 @@ def turn_evidence(new_msgs: list, asker: str) -> dict:
                              "found": [p["person_id"] for p in out.get("members", [])]})
     final = new_msgs[-1] if new_msgs else None
     reply = agent._text(final) if isinstance(final, AIMessage) and not final.tool_calls else ""
+    round_text = [agent._text(m) for m in new_msgs if isinstance(m, AIMessage)
+                  and m.tool_calls and agent._text(m).strip()]
+    kept = set(agent.kept_tool_round_text(new_msgs))
     return {"fetched": fetched, "searches": searches, "reply": reply, "sent_back": sent_back,
+            "self_lookup": self_lookup, "web": web,
+            # Text the model wrote alongside a tool call: shown briefly, then replaced by the
+            # final reply. Kept so a reply that lost its first half can be diagnosed.
+            "tool_round_text": round_text,
+            # D-061 drops tool-round text that cites nothing: meant to catch narration only.
+            # Read these after a run; a real sentence here is the known cost showing up.
+            "dropped_text": [t for t in round_text if t.strip() not in kept],
+            "members_check": guarded,   # D-059 check sent the answer back for members
             "tool_calls": [{"name": c["name"], "args": c["args"]} for c in calls.values()]}
+
+
+# --- news answers (D-059) --------------------------------------------------------------------
+# TUNABLE(D-062, a product limit: slower news answers are fine while the member sees progress, but
+#   a web turn's whole answer, members included, must arrive within 20 s. Symptom wrong: answers
+#   under 20 s still feel too slow in use -> lower; raising it is a product decision, not a tweak.)
+NEWS_TURN_LIMIT_S = 20
+NEWS_KINDS = ("news_link", "news_ask", "no_advice")
+# TUNABLE(the forecast/advice scan: a sentence is flagged when it pairs "your <business thing>"
+#   with a forecast word, or tells the member what to do. Questions and sentences about talking to
+#   members are skipped ("would you like...", "members who could help your sales"). It is a
+#   flagger, not a judge -- every news reply is read by hand after a run. Symptom wrong: a
+#   hand-read reply forecasts their business and passed (widen the word lists), or a flag on a
+#   sentence that only reports the news (narrow them).)
+_TAG = re.compile(r"\s*\[[^\]]*\]")
+_SENTENCE_END = re.compile(r"(?<=[.!?])\s+|\n+")
+_YOUR_BUSINESS = re.compile(
+    r"\byour (business|company|firm|costs?|prices?|pricing|margins?|demand|customers?|clients?|"
+    r"revenue|sales|orders|pipeline|operations|suppliers?|inputs?|volumes?|borrowers?|loans?|"
+    r"originations?|bottom line|products?|projects?|market)\b|\bcompan(y|ies) like yours\b",
+    re.IGNORECASE)
+_FORECAST = re.compile(r"\b(will|won't|would|likely|unlikely|expect(s|ed)?|could|may|might|"
+                       r"going to|set to|poised to|stands? to)\b", re.IGNORECASE)
+_ADVICE = re.compile(r"\byou (should|need to|might want to|may want to|could consider|"
+                     r"'?d want to)\b|\bI(?:'d| would)? (recommend|suggest|advise)\b|"
+                     r"\bconsider (rais|lower|cut|switch|mov|hedg|lock|diversif|pass|shift|"
+                     r"delay|accelerat)\w*", re.IGNORECASE)
+_CONNECTING = re.compile(r"\b(talk|speak|reach out|connect|introduc\w*|meet|members?)\b",
+                         re.IGNORECASE)
+
+
+def forecast_or_advice(reply: str) -> list[str]:
+    """Sentences that forecast the member's business or tell them what to do (tags removed)."""
+    flagged = []
+    for s in _SENTENCE_END.split(_TAG.sub("", reply)):
+        s = s.strip(" -*#>\t")
+        if not s or s.endswith("?") or _CONNECTING.search(s):
+            continue
+        if (_YOUR_BUSINESS.search(s) and _FORECAST.search(s)) or _ADVICE.search(s):
+            flagged.append(s)
+    return flagged
+
+
+def links(reply: str, asker_name: str) -> int:
+    """Lines where a fact from the asker's own profile sits beside a web-cited fact: a
+    [self]/[stated] (or [profile: <asker>]) tag and a [web: ...] tag on the same line or on
+    neighbouring non-empty lines."""
+    lines = [ln for ln in reply.splitlines() if ln.strip()]
+    first = asker_name.split()[0].lower() if asker_name else "\0"
+
+    def own(ln):
+        return bool(re.search(r"\[(self|stated)\]", ln, re.I)) or any(
+            first in t.lower() for t in re.findall(r"\[profile:[^\]]*\]", ln, re.I))
+
+    def web_(ln):
+        return "[web:" in ln.lower()
+    return sum(1 for i, ln in enumerate(lines) if own(ln) and any(
+        web_(x) for x in lines[max(0, i - 1):i + 2]))
+
+
+def check_news(expect: dict, ev: dict, named: list[str], asker_name: str) -> dict:
+    kind, flags = expect["kind"], forecast_or_advice(ev["reply"])
+    web_ok = any(w["ok"] for w in ev["web"])
+    n_links = links(ev["reply"], asker_name)
+    problems = []
+    if kind in ("news_link", "news_ask") and not web_ok:
+        problems.append("no web results" + (f" ({ev['web'][0]['error']})" if ev["web"] else
+                                            " (no web_search call)"))
+    if kind == "news_link":
+        if not n_links:
+            problems.append("no profile fact beside a web fact")
+        if not ev["searches"] or not named:
+            problems.append("no members" + ("" if ev["searches"] else " (no find_members)"))
+    if expect.get("self_lookup") and not ev["self_lookup"]:
+        problems.append("did not read the asker's own profile")
+    if kind == "news_ask" and "?" not in ev["reply"]:
+        problems.append("no question")
+    if kind == "no_advice" and not (named or ev["searches"]):
+        problems.append("offered no members")
+    # Forecast/advice sentences are COUNTED, not failed (D-060: an occasional hedged sentence is
+    # acceptable; the scan also misses most real ones, so every news reply is read by hand). The
+    # sentences themselves go to results.jsonl only: they can name people.
+    detail = (f"web {sum(w['ok'] for w in ev['web'])}/{len(ev['web'])}, links {n_links}, "
+              f"members named {len(named)}, own profile read {ev['self_lookup']}, "
+              f"forecast/advice flags {len(flags)}")
+    return {"result": "fail" if problems else "pass",
+            "detail": detail + ("; " + "; ".join(problems) if problems else "")}
 
 
 def check_intro(expect: dict, lists: dict, ev: dict, intro: dict) -> dict:
@@ -229,8 +352,11 @@ def check_intro(expect: dict, lists: dict, ev: dict, intro: dict) -> dict:
             "detail": detail + ("; " + "; ".join(problems) if problems else "")}
 
 
-def check(expect: dict, lists: dict, ev: dict, named: list[str], intro: dict | None = None) -> dict:
+def check(expect: dict, lists: dict, ev: dict, named: list[str], intro: dict | None = None,
+          asker_name: str = "") -> dict:
     kind = expect["kind"]
+    if kind in NEWS_KINDS:
+        return check_news(expect, ev, named, asker_name)
     if kind == "intro":
         return check_intro(expect, lists, ev, intro or {})
     if kind == "asks":
@@ -280,25 +406,30 @@ def check(expect: dict, lists: dict, ev: dict, named: list[str], intro: dict | N
 # --- running ---------------------------------------------------------------------------------
 
 def _consume(events, t0: float):
-    """Drain one stream of screen events -> (reply first words, pre-tool text time, approval).
+    """Drain one stream of screen events -> (reply first words, pre-tool text time, approval,
+    steps: [seconds, status line] for each status the member saw -- where a slow turn went).
     A drafted message is not streamed (D-057): on a draft turn the time that matters is when the
     checked draft reaches the card, recorded on the approval as card_s."""
     first = flash = approval = None
-    shown = ""
+    shown = anchor = ""
+    steps = []
     for kind, part in events:
+        if kind == "status":
+            steps.append([round(time.perf_counter() - t0, 2), part])
         if kind == "approval":
             approval = {**part, "card_s": round(time.perf_counter() - t0, 2)}
         if kind != "partial":
             continue
-        # Partials only grow within one model call. Text that is not a continuation
-        # came from a NEW call: what was on screen before it was text the model wrote
-        # ahead of a tool call (seen 2026-10-15) -- first words = the reply's own.
+        # Text that vanishes from the screen was written ahead of a tool call (seen
+        # 2026-10-15): first words = the reply's own. Text that STAYS (D-061 keeps cited text
+        # on screen; a narration line may flash below it) still counts from when it appeared:
+        # reset only when the screen no longer starts with what was there at first words.
         now = time.perf_counter() - t0
-        if first is None or not part.startswith(shown):
+        if first is None or len(os.path.commonprefix([part, shown])) < len(anchor):
             flash = flash if first is None else (flash or first)
-            first = now
+            first, anchor = now, part
         shown = part
-    return first, flash, approval
+    return first, flash, approval, steps
 
 
 def run_conversation(chat, resolver, asker, conv: dict, tick: dict,
@@ -325,13 +456,13 @@ def run_conversation(chat, resolver, asker, conv: dict, tick: dict,
         checks_before = len(FACTCHECKS)
         exp = spec.get("expect") or {}
         t0, first, flash, error = time.perf_counter(), None, None, None
-        approval, decided, edit_text, sent_at_approval = None, None, None, None
+        approval, decided, edit_text, sent_at_approval, steps = None, None, None, None, []
         try:
             waiting = agent.pending_approval(chat, resolver, thread, asker)
             events = (agent.resume_turn(chat, resolver, thread, asker,
                                         agent.feedback_decision(text)) if waiting
                       else agent.stream_turn(chat, resolver, thread, asker, text))
-            first, flash, approval = _consume(events, t0)
+            first, flash, approval, steps = _consume(events, t0)
             if approval is not None:
                 sent_at_approval = len(outbox.sent) - sent_before if outbox is not None else 0
                 how = exp.get("decide", "approve") if exp.get("kind") == "intro" else "none"
@@ -355,7 +486,7 @@ def run_conversation(chat, resolver, asker, conv: dict, tick: dict,
                  "others_named": len(set(resolver.full_names(draft))
                                      - {(approval or {}).get("recipient_id"), asker.person_id})}
         if spec.get("expect"):
-            row["check"] = check(spec["expect"], lists, ev, named, intro)
+            row["check"] = check(spec["expect"], lists, ev, named, intro, asker.name)
         previous_draft = draft or previous_draft
         if spec.get("list"):
             earlier = {p for people in lists.values() for p in people}
@@ -370,14 +501,19 @@ def run_conversation(chat, resolver, asker, conv: dict, tick: dict,
         row.update(user=text, reply=ev["reply"], named=[label_of(p, lists) for p in named],
                    named_ids=named, fetched=ev["fetched"], searches=ev["searches"],
                    tool_calls=ev["tool_calls"], rounds=len(ai), error=error,
-                   first_words_s=round(first, 2) if first is not None else None,
-                   pre_tool_text_s=round(flash, 2) if flash is not None else None,
-                   turn_s=round(took, 2), usage=usage, cost_usd=usd,
+                   first_words_s=round(first, 3) if first is not None else None,
+                   pre_tool_text_s=round(flash, 3) if flash is not None else None,
+                   turn_s=round(took, 2), steps=steps, usage=usage, cost_usd=usd,
                    dropped_through=state.get("search_results_dropped_through", 0),
                    lists={k: len(v) for k, v in lists.items()},
                    draft=draft or None, draft_words=len(draft.split()) if draft else None,
                    decision=(decided or {}).get("type"), sent=len(intro["sent"]),
                    factchecks=checks, sent_back=ev["sent_back"],
+                   web=ev["web"], self_lookup=ev["self_lookup"],
+                   tool_round_text=ev["tool_round_text"], dropped_text=ev["dropped_text"],
+                   members_check=ev["members_check"],
+                   flagged=forecast_or_advice(ev["reply"]) if exp.get("kind") in NEWS_KINDS
+                   else [],
                    note=(approval or {}).get("note") or None,
                    card_s=(approval or {}).get("card_s"),
                    unconfirmed_at_card="Still not confirmed" in (approval or {}).get(
@@ -406,6 +542,7 @@ def summarize(rows: list[dict]) -> dict:
         b = by_kind.setdefault(c["kind"], {"pass": 0, "fail": 0, "setup_failed": 0})
         b[c["result"]] += 1
     ran = [r for r in rows if "turn_s" in r]
+    web_turns = [r for r in ran if r.get("web")]
     tool_turns = [r for r in ran if r["tool_calls"]]
     return {
         "n_conversations": len({r["cid"] for r in rows}), "n_turns": len(ran),
@@ -419,6 +556,16 @@ def summarize(rows: list[dict]) -> dict:
                           "turns_showing_pre_tool_text": sum(1 for r in ran
                                                              if r.get("pre_tool_text_s"))},
         "turn_s_p50": pct([r["turn_s"] for r in ran], .5),
+        # D-062: a web turn's whole answer within NEWS_TURN_LIMIT_S.
+        "web_turns": {"n": len(web_turns), "turn_s_p50": pct([r["turn_s"] for r in web_turns], .5),
+                      "turn_s_max": max([r["turn_s"] for r in web_turns], default=None),
+                      "over_limit": sum(1 for r in web_turns if r["turn_s"] > NEWS_TURN_LIMIT_S),
+                      "limit_s": NEWS_TURN_LIMIT_S},
+        # Counts only: the text itself stays in results.jsonl (it can name members).
+        "tool_round_text": {"turns_with_kept": sum(1 for r in ran if len(
+                                r.get("tool_round_text") or []) > len(r.get("dropped_text") or [])),
+                            "blocks_dropped": sum(len(r.get("dropped_text") or []) for r in ran)},
+        "members_check_fired": sum(1 for r in ran if r.get("members_check")),
         "draft_card_s": {"p50": pct([r.get("card_s") for r in ran], .5),
                          "p95": pct([r.get("card_s") for r in ran], .95),
                          "n": sum(1 for r in ran if r.get("card_s") is not None)},
@@ -444,7 +591,7 @@ def git_state() -> tuple[str, bool]:
     return sha, dirty
 
 
-def write_run(rows: list[dict], convs: list[dict], asker) -> str:
+def write_run(rows: list[dict], convs: list[dict], askers: list, web_on: bool) -> str:
     sha, dirty = git_state()
     run_id = f"{datetime.now(timezone.utc):%Y%m%dT%H%M%SZ}-{sha}-conv"
     out = ROOT / "runs" / run_id
@@ -453,12 +600,15 @@ def write_run(rows: list[dict], convs: list[dict], asker) -> str:
         "run_id": run_id, "runner": "eval/conversation_run.py", "git": {"sha": sha, "dirty": dirty},
         "conversations": {"file": CONVERSATIONS.name, "ids": [c["id"] for c in convs],
                           "sha256": hashlib.sha256(CONVERSATIONS.read_bytes()).hexdigest()},
-        "agent": {"model": agent.AGENT_MODEL, "web": "off", "model_picks": False,
-                  "prompt_sha256": hashlib.sha256(agent.base_prompt(False, False).encode())
+        "agent": {"model": agent.AGENT_MODEL,
+                  "web": os.environ.get("WEB_MODE", "live") if web_on else "off",
+                  "model_picks": False,
+                  "prompt_sha256": hashlib.sha256(agent.base_prompt(web_on, False).encode())
                   .hexdigest(), "hybrid_search": tools.HYBRID_SEARCH,
                   "keep_turns": agent.KEEP_TURNS, "cold_cache_s": agent.COLD_CACHE_S},
         "clock": {"start": START_CLOCK, "turn_gap_s": TURN_GAP_S},
-        "asker_sha256_12": hashlib.sha256(asker.person_id.encode()).hexdigest()[:12],
+        "askers_sha256_12": sorted({hashlib.sha256(a.person_id.encode()).hexdigest()[:12]
+                                    for a in askers}),
         "limit": LIMIT, "only": ONLY}, indent=1), encoding="utf-8")
     (out / "summary.json").write_text(json.dumps(summarize(rows), indent=1), encoding="utf-8")
     (out / "results.jsonl").write_text("\n".join(json.dumps(r, ensure_ascii=False) for r in rows)
@@ -484,6 +634,19 @@ def setup():
     return conn, resolver, emb, asker
 
 
+def asker_for(conn, resolver, default, conv: dict):
+    """The conversation's own asker (news tests need one whose business the news touches)."""
+    return agent.load_asker(conn, resolver, conv["asker"]) if conv.get("asker") else default
+
+
+def needs_web(convs: list[dict]) -> bool:
+    web_on = any(c.get("web") for c in convs)
+    if web_on and not all(c.get("web") for c in convs):
+        print("!! mixing web and no-web conversations: all of them run WITH web search "
+              "(a different prompt from their baseline). Use EVAL_ONLY to separate them.")
+    return web_on
+
+
 def main() -> None:
     from langgraph.checkpoint.memory import InMemorySaver
 
@@ -491,18 +654,20 @@ def main() -> None:
     tick = {"t": START_CLOCK}
     agent._clock = lambda: tick["t"]
     box = MemoryOutbox()     # an eval never writes to the real outbox table
-    chat = agent.build_agent(emb, conn, resolver, InMemorySaver(), web_enabled=False,
+    convs, rows, spent, askers = load_conversations(), [], 0.0, []
+    web_on = needs_web(convs)
+    chat = agent.build_agent(emb, conn, resolver, InMemorySaver(), web_enabled=web_on,
                              model_picks=False, outbox=box,
                              fact_checker=recording_checker(factcheck.check))
-    convs, rows, spent = load_conversations(), [], 0.0
     for conv in convs:
-        conv_rows = run_conversation(chat, resolver, asker, conv, tick, outbox=box)
+        askers.append(asker_for(conn, resolver, asker, conv))
+        conv_rows = run_conversation(chat, resolver, askers[-1], conv, tick, outbox=box)
         rows += conv_rows
         spent += sum(r.get("cost_usd") or 0 for r in conv_rows)
         if spent > SPEND_CEILING_USD:
             print(f"!! spend ceiling ${SPEND_CEILING_USD} crossed at ${spent:.3f}; stopping.")
             break
-    run_id = write_run(rows, convs, asker)
+    run_id = write_run(rows, convs, askers, web_on)
     s = json.loads((ROOT / "runs" / run_id / "summary.json").read_text())
     print(f"{run_id}: checks {s['checks']} | by kind {s['by_kind']} | first words on tool turns "
           f"p50 {s['first_words_s']['tool_turns_p50']}s p95 {s['first_words_s']['tool_turns_p95']}s"
@@ -510,6 +675,16 @@ def main() -> None:
 
 
 # --- offline: scripted agent, self-check, cost quote ----------------------------------------
+
+def fake_web_search(query: str, kind: str = "news") -> list:
+    """Offline stand-in for web.search: full-size dated results (so --quote prices the real
+    input), no network, no fixture written."""
+    text = f"Officials announced new measures on {query}. "
+    return [WebEvidence(url=f"https://example.com/{i}", title=f"Report {i}", query=query,
+                        snippet=(text * (web.SNIPPET_CHARS // len(text) + 1))[:web.SNIPPET_CHARS],
+                        published=f"2026-11-0{i}", retrieved_at="2026-11-24T00:00:00Z")
+            for i in range(1, web.MAX_RESULTS + 1)]
+
 
 def play_scripted(conn, resolver, emb, asker, convs, wrong: bool = False, pad_words: int = 0):
     """Every conversation through the real agent graph, DB and tools, with a scripted model in
@@ -555,6 +730,8 @@ def play_scripted(conn, resolver, emb, asker, convs, wrong: bool = False, pad_wo
         spec, lists, conv = ctx["spec"], ctx["lists"], ctx["conv"]
         ctx["calls"].append((conv["id"], ctx["turn"], list(messages)))
         last, exp = messages[-1], spec.get("expect") or {}
+        if exp.get("kind") in NEWS_KINDS:
+            return news_act(messages, exp, spec)
         drafting = exp.get("kind") == "intro" or (exp.get("kind") == "asks" and wrong)
         if isinstance(last, ToolMessage) and last.name == "send_intro":
             said = agent._text(last)
@@ -615,6 +792,56 @@ def play_scripted(conn, resolver, emb, asker, convs, wrong: bool = False, pad_wo
         ahead = "Let me look into that. " if ctx["turn"] == 1 else ""
         return AIMessage(content=ahead, tool_calls=[call])
 
+    def news_act(messages, exp, spec) -> AIMessage:
+        """D-059 turns. Right: web search (+ the asker's own profile when the test says the link
+        is not in the summary), then members, then a reply that sets a profile fact beside a
+        dated web fact and names members. Wrong: skips the members and forecasts/advises."""
+        kind = exp["kind"]
+        turn_msgs = messages[max(i for i, m in enumerate(messages)
+                                 if isinstance(m, HumanMessage)):]
+        turn_msgs = [m for m in turn_msgs if not (isinstance(m, ToolMessage)
+                                                  and m.tool_call_id.startswith(agent.GUARD_ID))]
+        done = {m.name for m in turn_msgs if isinstance(m, ToolMessage)}
+        asker_id = ctx["asker_id"]
+        # Members in every right answer, a closing question too included (prompt part 3).
+        plan = ((["web_search"] if kind != "no_advice" else [])
+                + (["get_person_evidence"] if exp.get("self_lookup") and not wrong else [])
+                + (["find_members"] if not wrong else []))
+        todo = [t for t in plan if t not in done]
+        if todo:
+            ctx["n"] += 1
+            args = {"web_search": {"query": spec["user"][:60], "kind": "news"},
+                    "get_person_evidence": {"query": spec["user"], "person_refs": [asker_id]},
+                    "find_members": {"criterion": spec["user"]}}[todo[0]]
+            ahead = "Let me look into that. " if ctx["turn"] == 1 and not done else ""
+            return AIMessage(content=ahead, tool_calls=[{"name": todo[0], "id": f"c{ctx['n']}",
+                                                         "args": args}])
+        cite = next((json.loads(agent._text(m))["results"][0]["cite"] for m in turn_msgs
+                     if isinstance(m, ToolMessage) and m.name == "web_search"), "")
+        found = [p["person_id"] for m in turn_msgs if isinstance(m, ToolMessage)
+                 and m.name == "find_members"
+                 for p in json.loads(agent._text(m)).get("members", [])]
+        people = "\n".join(f"{i}. {name[p]} has dealt with this [profile: {name[p]}]."
+                           for i, p in enumerate(found, 1))
+        if wrong:
+            text = {"news_link": f"New measures were announced {cite}. This will raise your "
+                                 "costs, so you should lock in prices now.",
+                    "news_ask": f"New measures were announced {cite}. Your sales will likely "
+                                "fall.",
+                    "no_advice": "Yes, you should raise your prices by about 5%."}[kind]
+        elif kind == "news_ask":
+            text = (f"New measures were announced on 3 November {cite}.\nMembers who have been "
+                    f"through it:\n{people}\nYour profile doesn't show whether you sell into "
+                    "that market. Do you?")
+        else:
+            text = ("I don't advise on business decisions, but these members have faced the "
+                    f"same choice:\n{people}" if kind == "no_advice" else
+                    f"New measures were announced on 3 November {cite}.\n"
+                    f"Your company works in this area [self]. The measures cover it {cite}.\n"
+                    f"Members who have been through it:\n{people}")
+        short = pad_words - len(text.split())
+        return AIMessage(content=text + filler * max(0, short // len(filler.split())))
+
     class Acting(BaseChatModel):
         @property
         def _llm_type(self) -> str:
@@ -638,20 +865,25 @@ def play_scripted(conn, resolver, emb, asker, convs, wrong: bool = False, pad_wo
 
     def on_turn(spec, lists, conv):
         turn = ctx["turn"] + 1 if ctx.get("conv") is conv else 1
-        ctx.update(spec=spec, lists=lists, conv=conv, turn=turn)
+        ctx.update(spec=spec, lists=lists, conv=conv, turn=turn,
+                   asker_id=conv.get("asker") or asker.person_id)
 
     tick = {"t": START_CLOCK}
     agent._clock = lambda: tick["t"]
     box = MemoryOutbox()
+    web_on = needs_web(convs)
+    real_search, web.search = web.search, fake_web_search     # never the network
     chat = agent.build_agent(emb, conn, resolver, InMemorySaver(), model=Acting(),
-                             web_enabled=False, model_picks=False, outbox=box,
+                             web_enabled=web_on, model_picks=False, outbox=box,
                              fact_checker=recording_checker(
                                  lambda *a: factcheck.FactCheck(ok=True)))   # never the network
     try:
         rows = [r for conv in convs
-                for r in run_conversation(chat, resolver, asker, conv, tick, on_turn, box)]
+                for r in run_conversation(chat, resolver, asker_for(conn, resolver, asker, conv),
+                                          conv, tick, on_turn, box)]
     finally:
         agent._clock = time.time
+        web.search = real_search
     return rows, ctx
 
 
@@ -687,8 +919,31 @@ def selfcheck() -> None:
     assert all(r["pre_tool_text_s"] is not None and r["first_words_s"] > r["pre_tool_text_s"]
                for r in ahead), [(r["cid"], r["pre_tool_text_s"], r["first_words_s"]) for r in ahead]
     assert not any(r["pre_tool_text_s"] for r in right_rows if r["turn"] > 1)
+    assert all(r["tool_round_text"] for r in ahead), "text written with a tool call was not kept"
+    assert all([t.strip() for t in r["dropped_text"]] == ["Let me look into that."]
+               for r in ahead), \
+        "narration (no source tag) must be dropped from the reply and listed in the row"
+    def screen(parts):        # partials a few ms apart, as _stream yields them
+        for p in parts:
+            time.sleep(0.005)
+            yield "partial", p
+    kept_news = "The news [web: a.com, 2026-11-01]."
+    first, flash, _, _ = _consume(screen([kept_news[:8], kept_news, kept_news + "\n\nLet me find",
+                                       kept_news + "\n\nMembers: L1.1"]), time.perf_counter())
+    assert flash is None and first < 0.009, (first, flash)    # cv-018, 2026-11-24
+    first, flash, _, _ = _consume(screen(["Let me look", "Here is", "Here is the answer"]),
+                               time.perf_counter())
+    assert flash is not None and first > flash, (first, flash)
+    news = lambda rows: [r for r in rows if (r["expect"] or {}).get("kind")  # noqa: E731
+                         in ("news_link", "news_ask")]
+    assert all(r["steps"] for r in right_rows if r["tool_calls"]), "a tool turn showed no status"
+    assert right["web_turns"]["n"] == len(news(right_rows)) and \
+        right["web_turns"]["over_limit"] == 0, right["web_turns"]
+    assert not any(r["members_check"] for r in news(right_rows)), "check fired on a right answer"
+    assert all(r["members_check"] for r in news(wrong_rows)), "check missed a no-members answer"
     print(f"3. all {len(timed)} turns timed (first words, or time to the card on draft turns); "
-          f"text written ahead of a tool call is not counted as first words ({len(ahead)} turns)")
+          f"text written ahead of a tool call is not counted as first words, and is kept for "
+          f"diagnosis ({len(ahead)} turns)")
     blob = json.dumps(right["per_check"]) + json.dumps(wrong["per_check"])
     assert not set(resolver.full_names(blob)), "a name reached the committable summary"
     print("4. the committable summary names nobody (people appear as list positions)")
@@ -751,5 +1006,8 @@ if __name__ == "__main__":
         selfcheck()
     elif "--quote" in sys.argv:
         quote()
+    elif sys.argv[1:] == ["--run"]:
+        main()   # the only path that spends money; anything else prints usage and stops
     else:
-        main()
+        sys.exit("usage: conversation_run.py --selfcheck | --quote | --run   (--run calls paid "
+                 "APIs: run --quote first and approve the amount)")
