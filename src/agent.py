@@ -147,6 +147,9 @@ def render_reply(text: str, links: dict[str, str] | None = None) -> str:
         return f"([{m.group(1).strip()}]({url}))" if url else m.group(0)
 
     cleaned = _WEB_TAG.sub(_link, _drop_refusal_opener(_HIDDEN_TAG.sub("", text)))
+    # An internal word the model sometimes uses ("Your dossier notes..."): members have profiles.
+    cleaned = re.sub(r"\b([Dd])ossier(s?)\b",
+                     lambda m: ("P" if m.group(1) == "D" else "p") + "rofile" + m.group(2), cleaned)
     lines = (re.sub(r"[ \t]{2,}", " ", line).rstrip() for line in cleaned.splitlines())
     return "\n".join(lines).strip()
 
@@ -377,6 +380,35 @@ DECLINE = re.compile(r"\b(?:don['’]?t|do not|doesn['’]?t|can['’]?t|cannot|
 def keeps(text: str) -> bool:
     """D-061: does text written alongside a tool call belong in the reply?"""
     return bool(_SOURCE_TAG.search(text) or DECLINE.search(text))
+
+
+# TUNABLE(narration openers trimmed from kept text: a kept block is kept whole when it cites, so a
+#   "Let me find people in the network who..." at its end reached the screen (2026-11-25, twice).
+#   Only untagged sentences at the START or END of a block go. Symptom wrong: a real sentence
+#   starting "I'll" or "Let me" vanishes from a reply -> narrow; narration still shows -> widen.)
+_NARRATION = re.compile(r"^(?:now,?\s+|first,?\s+)?(?:let me(?! know)|i['’]ll|i will)\b",
+                        re.IGNORECASE)
+_SENTENCE_END = re.compile(r"(?<=[.!?:])(?:\*\*)?\s+")
+
+
+def trim_narration(block: str) -> str:
+    """Kept text (D-061) without the narration that opens or closes it."""
+    paras = [p for p in block.strip().split("\n\n") if p.strip()]
+    while paras and _NARRATION.match(paras[0].strip()) and not keeps(paras[0]):
+        paras.pop(0)
+    while paras:
+        last = paras[-1]
+        cuts = [m.end() for m in _SENTENCE_END.finditer(last)]
+        start = next((c for c in reversed(cuts) if c < len(last)), 0)
+        tail = last[start:].strip()
+        if not tail or not _NARRATION.match(tail) or keeps(tail) or "\n" in tail:
+            break
+        head = last[:start].rstrip()
+        if head:
+            paras[-1] = head
+        else:
+            paras.pop()
+    return "\n\n".join(paras)
 # The members check's own entry in the thread (a tool call it adds, never a real search).
 GUARD_ID = "guard-members-"
 # TUNABLE(a member asking about themselves: "my business", "affect us", "matters to me". D-059's
@@ -392,6 +424,14 @@ MEMBERS_MISSING = (
     "line or two each, from their passages; if fewer than three clearly fit, name only those and "
     "say in one short sentence that few members work on this. Don't repeat anything above and "
     "don't search again.")
+MEMBERS_ADVICE = (
+    "Your text above is already shown to the member as the start of your answer. They asked what "
+    "they should do; we don't advise on business decisions, so the answer must also name members "
+    "of the network who have faced the same decision. These members were found for their "
+    "question and their industry. Now write ONLY the members part, to follow your text: the three "
+    "who fit best, a line or two each, from their passages; if fewer than three clearly fit, name "
+    "only those and say in one short sentence that few members work on this. Don't repeat "
+    "anything above and don't search again.")
 # D-064: on a news or "should I" turn the members search is anchored on the asker's industry and
 # returns a wider pool, which the model trims to the three who fit best (never padded).
 MEMBERS_PICK = (
@@ -468,7 +508,8 @@ def kept_tool_round_text(messages) -> list[str]:
             continue
         guarded = any(c["id"].startswith(GUARD_ID) for c in m.tool_calls)
         if guarded or keeps(_text(m)):
-            out.append(_text(m).strip())
+            if text := trim_narration(_text(m)):
+                out.append(text)
     return out
 
 
@@ -482,6 +523,16 @@ def members_missing(messages) -> bool:
     searched = any(c["name"] == "find_members" for m in turn if isinstance(m, AIMessage)
                    for c in (m.tool_calls or []))
     return web_ok and not searched and bool(ABOUT_ME.search(user))
+
+
+def advice_without_members(messages, named: set[str]) -> bool:
+    """A "should I ...?" turn about the member's business whose reply names nobody and searched
+    nobody (live case 2026-11-25: it declined, then asked a question instead of naming members).
+    `named` = members the reply names; a reply re-naming people from earlier turns is fine."""
+    user = next((_text(m) for m in reversed(messages) if isinstance(m, HumanMessage)), "")
+    searched = any(c["name"] == "find_members" for m in _since_member(messages)
+                   if isinstance(m, AIMessage) for c in (m.tool_calls or []))
+    return bool(ABOUT_ME.search(user) and ADVICE.search(user)) and not searched and not named
 
 
 def _redrafted(messages) -> bool:
@@ -730,18 +781,28 @@ def build_agent(emb, conn, resolver, checkpointer, model=None, web_enabled=WEB_S
         if not isinstance(last, AIMessage) or last.tool_calls:
             return None
         earlier = state["messages"][:-1]
-        if web_enabled and members_missing(state["messages"]):
+        named = set(resolver.full_names(_text(last))) - {runtime.context.person_id}
+        news_gap = web_enabled and members_missing(state["messages"])
+        advice_gap = web_enabled and not news_gap and advice_without_members(state["messages"],
+                                                                             named)
+        if news_gap or advice_gap:
             # D-062 option A: the check runs the members search itself, on what the turn
             # searched the web for, so the model needs one more call (write the members part),
             # not two (start a search, then write) -- ~4-5 s off a turn that is already long.
+            # A "should I" turn searches on the member's question instead (it searched no web).
             call_id = f"{GUARD_ID}{last.id}"
-            criterion = anchored(members_criterion(state["messages"]), runtime.context.industry)
+            user = next(_text(m) for m in reversed(state["messages"])
+                        if isinstance(m, HumanMessage))
+            topic = members_criterion(state["messages"]) if news_gap else user
+            criterion = anchored(topic, runtime.context.industry)
             box = Toolbox(emb, conn, resolver, asker=runtime.context.person_id,
                           model_picks=model_picks)
             found = json.loads(_model_view(box.find_members(criterion, top=MEMBER_POOL,
                                                             per_member=POOL_PASSAGES)))
-            found["instruction"] = MEMBERS_MISSING if found.get("ok") else MEMBERS_UNAVAILABLE
-            log.info("members check: news answer had no members search; searched for it")
+            found["instruction"] = ((MEMBERS_MISSING if news_gap else MEMBERS_ADVICE)
+                                    if found.get("ok") else MEMBERS_UNAVAILABLE)
+            log.info("members check: %s answer named no members; searched for them",
+                     "news" if news_gap else "should-I")
             return {"messages": [
                 last.model_copy(update={"content": _text(last), "tool_calls": [
                     {"name": "find_members", "id": call_id, "args": {"criterion": criterion},
@@ -1010,7 +1071,8 @@ def _stream(agent, resolver, thread_id: str, asker: Asker, payload, new_msgs: li
                         text = _text(m).strip()
                         if text and (any(c["id"].startswith(GUARD_ID) for c in m.tool_calls)
                                      or keeps(text)) \
-                                and not set(resolver.full_names(text)) - allowed:
+                                and not set(resolver.full_names(text)) - allowed \
+                                and (text := trim_narration(text)):
                             kept.append(text)
                             yield "kept", "\n\n".join(kept)
                         yield "status", step_status(m.tool_calls, asker)
@@ -1649,4 +1711,32 @@ if __name__ == "__main__":
     print(f"27. news and 'should I' turns search members with the asker's industry in front, "
           f"{MEMBER_POOL} candidates, told to name the three that fit (never padded); other "
           "searches unchanged")
+
+    # 28 -- run 6 fixes: narration at the edges of kept text goes; "dossier" never reaches the
+    # screen; a "should I" reply that names nobody gets members added like a news answer.
+    cited = f"Duties rose to 50% {tag}."
+    assert trim_narration(f"{cited}\n\n**Members in this space:** Let me find people in the "
+                          "network who work with tariffs.") == \
+        f"{cited}\n\n**Members in this space:**"
+    assert trim_narration(f"{cited}\n\n**Who else?** Let me find them:") == \
+        f"{cited}\n\n**Who else?**"
+    assert trim_narration(f"I'll search for tariff news.\n\n{cited}") == cited
+    assert trim_narration(decline) == decline
+    assert trim_narration(f"{cited} Let me know if you want the detail.") == \
+        f"{cited} Let me know if you want the detail."
+    assert render_reply("Your dossier notes two plants; dossiers differ.") == \
+        "Your profile notes two plants; profiles differ."
+    asked = "I don't advise on business decisions. What's your angle: fees or your model?"
+    events, msgs, n = web_turn([AIMessage(content=asked), AIMessage(content=members)],
+                               "So should I raise my prices?", "advice-guard")
+    got = next(json.loads(_text(m)) for m in msgs if isinstance(m, ToolMessage)
+               and m.tool_call_id.startswith(GUARD_ID))
+    assert n == 2 and got["instruction"] == MEMBERS_ADVICE, (n, got.get("instruction"))
+    assert _text(msgs[-1]) == f"{asked}\n\n{members}", _text(msgs[-1])
+    assert ("kept", asked) in events
+    assert not advice_without_members(msgs[:1], {"someone"}), "re-naming earlier members is fine"
+    _, msgs, n = web_turn([AIMessage(content=asked)], "Should I read up on tariffs?", "plain-q")
+    assert n == 1, "a 'should I' question not about their business gets no members"
+    print("28. narration at the edges of kept text goes; 'dossier' shows as 'profile'; a "
+          "'should I' reply naming nobody gets members added")
     print("agent self-check passed")

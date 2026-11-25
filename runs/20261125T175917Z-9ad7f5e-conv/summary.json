@@ -1,0 +1,122 @@
+{
+ "n_conversations": 6,
+ "n_turns": 8,
+ "checks": {
+  "pass": 4,
+  "fail": 4,
+  "setup_failed": 0
+ },
+ "by_kind": {
+  "news_link": {
+   "pass": 2,
+   "fail": 3,
+   "setup_failed": 0
+  },
+  "no_advice": {
+   "pass": 1,
+   "fail": 1,
+   "setup_failed": 0
+  },
+  "news_ask": {
+   "pass": 1,
+   "fail": 0,
+   "setup_failed": 0
+  }
+ },
+ "errors": 0,
+ "first_words_s": {
+  "tool_turns_p50": 6.769,
+  "tool_turns_p95": 8.166,
+  "no_tool_turns_p50": 0.686,
+  "n_tool_turns": 6,
+  "turns_showing_pre_tool_text": 6
+ },
+ "turn_s_p50": 13.09,
+ "web_turns": {
+  "n": 6,
+  "first_words_p50": 6.769,
+  "first_words_max": 8.166,
+  "over_target": 3,
+  "target_s": 7,
+  "first_status_max": 2.76,
+  "turn_s_p50": 15.18,
+  "turn_s_max": 16.8
+ },
+ "news_members": {
+  "turns": 8,
+  "fewer_than_3": 4
+ },
+ "tool_round_text": {
+  "turns_with_kept": 3,
+  "blocks_dropped": 6
+ },
+ "members_check_fired": 2,
+ "draft_card_s": {
+  "p50": null,
+  "p95": null,
+  "n": 0
+ },
+ "cost_usd": 0.1495,
+ "factcheck": {
+  "model": "gpt-5.4-mini",
+  "version": "factcheck-v1",
+  "calls": 0,
+  "flagged": 0,
+  "errors": 0,
+  "rewrites": 0,
+  "unconfirmed_at_card": 0,
+  "heads_ups": 0,
+  "seconds_p50": null,
+  "cost_usd": 0
+ },
+ "per_check": {
+  "cv-014.t1": {
+   "kind": "news_link",
+   "pattern": "news: tariffs on their inputs, then 'should I raise prices?'",
+   "result": "pass",
+   "detail": "web 1/1, links 1, members named 3, own profile read True, forecast/advice flags 0"
+  },
+  "cv-014.t2": {
+   "kind": "no_advice",
+   "pattern": "news: tariffs on their inputs, then 'should I raise prices?'",
+   "result": "pass",
+   "detail": "web 0/0, links 0, members named 3, own profile read False, forecast/advice flags 0"
+  },
+  "cv-015.t1": {
+   "kind": "news_link",
+   "pattern": "news: rate decision for a lender",
+   "result": "fail",
+   "detail": "web 1/1, links 0, members named 2, own profile read True, forecast/advice flags 0; no profile fact beside a web fact"
+  },
+  "cv-016.t1": {
+   "kind": "news_link",
+   "pattern": "news: link only in the full profile (Europe), not the summary",
+   "result": "pass",
+   "detail": "web 1/1, links 1, members named 1, own profile read True, forecast/advice flags 0"
+  },
+  "cv-017.t1": {
+   "kind": "news_ask",
+   "pattern": "news: profile does not show the link -> ask",
+   "result": "pass",
+   "detail": "web 1/1, links 1, members named 3, own profile read True, forecast/advice flags 1"
+  },
+  "cv-018.t1": {
+   "kind": "news_link",
+   "pattern": "news: open-ended, searches chosen from their profile",
+   "result": "fail",
+   "detail": "web 3/3, links 0, members named 3, own profile read False, forecast/advice flags 1; no profile fact beside a web fact"
+  },
+  "cv-019.t1": {
+   "kind": "news_link",
+   "pattern": "news (from a live session): open-ended news, then should I raise prices",
+   "result": "fail",
+   "detail": "web 3/3, links 0, members named 1, own profile read False, forecast/advice flags 1; no profile fact beside a web fact"
+  },
+  "cv-019.t2": {
+   "kind": "no_advice",
+   "pattern": "news (from a live session): open-ended news, then should I raise prices",
+   "result": "fail",
+   "detail": "web 0/0, links 0, members named 0, own profile read False, forecast/advice flags 0; offered no members"
+  }
+ }
+}
