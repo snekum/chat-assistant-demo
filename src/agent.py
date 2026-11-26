@@ -1007,25 +1007,28 @@ def resume_turn(agent, resolver, thread_id: str, asker: Asker, decision: dict):
                        Command(resume={"decisions": [decision]}), [])
 
 
-# TUNABLE(40 characters of a search's wording in the status line: enough to recognise the topic,
-#   short enough that three steps fit on one line of a phone screen. Symptom wrong: statuses wrap
-#   to several lines -> lower; topics cut to the point of meaning nothing -> raise.)
-STATUS_TOPIC_CHARS = 40
+# TUNABLE(60 characters of a search's wording in the status line. Was 40 while every step shared
+#   one line; since D-063 each step gets the line to itself, so a search shows nearly whole
+#   (a live news turn showed "banking technology vendors Fiserv FIS…", 2026-11-26). Symptom
+#   wrong: a status wraps to two lines on a phone -> lower; topics cut mid-thought -> raise.)
+STATUS_TOPIC_CHARS = 60
 STATUS_SEP = " · "   # joins steps started together; the chat app splits on it to rotate them (D-063)
 
 
 def step_status(tool_calls, asker: Asker) -> str:
-    """One status line for EVERYTHING a model step started. Calls made together arrive together;
-    one status each meant only the last stayed on screen (a news turn showed the members search
-    for the whole web search, 2026-11-24). Plain words, not the tool's raw arguments."""
+    """One status for EVERYTHING a model step started, steps joined by STATUS_SEP. Calls made
+    together arrive together; one status each meant only the last stayed on screen (a news turn
+    showed the members search for the whole web search, 2026-11-24). Each search is its own step,
+    so the chat app rotates through them; "and 2 more" told the member nothing (2026-11-26).
+    Plain words, not the tool's raw arguments."""
     def topic(text: str) -> str:
         text = " ".join(str(text or "").split())
         return text if len(text) <= STATUS_TOPIC_CHARS else \
             text[:STATUS_TOPIC_CHARS].rsplit(" ", 1)[0] + "…"
 
     def grouped(label: str, topics: list[str]) -> str:
-        more = f" and {len(topics) - 1} more" if len(topics) > 1 else ""
-        return f"{label}: {topic(topics[0])}{more}" if topics[0] else label
+        named = list(dict.fromkeys(topic(t) for t in topics if str(t or "").strip()))
+        return STATUS_SEP.join(f"{label}: {t}" for t in named) or label
 
     web, members, steps = [], [], []
     own = others = False
@@ -1664,8 +1667,10 @@ if __name__ == "__main__":
                     "criterion": "construction materials manufacturers dealing with tariff "
                                  "pressure on steel"}}]
     line = step_status(together, asker)
-    assert line == ("Searching the web: steel tariffs and 1 more · Checking your profile · "
-                    "Finding members: construction materials manufacturers…"), line
+    assert line == ("Searching the web: steel tariffs · Searching the web: steel import duties · "
+                    "Checking your profile · "
+                    "Finding members: construction materials manufacturers dealing with tariff…"), line
+    assert "more" not in line, line                     # each search its own rotating step
     assert step_status([{"name": "get_person_evidence", "id": "e", "args": {
         "query": "q", "person_refs": [other]}}], asker) == "Reading their profiles"
     events, _, _ = web_turn([AIMessage(content="", tool_calls=[
@@ -1673,7 +1678,7 @@ if __name__ == "__main__":
         AIMessage(content=f"{news}\n\n{members}")], "How do tariffs affect my business?", "st")
     assert [p for k, p in events if k == "status"][0] == (
         "Searching the web: us tariffs latest · Finding members: construction materials "
-        "manufacturers…"), events
+        "manufacturers dealing with tariff…"), events
     print("26. steps started together show as one status line in plain words")
 
     # 27 -- D-064: news and "should I" turns search members with the asker's industry in front
